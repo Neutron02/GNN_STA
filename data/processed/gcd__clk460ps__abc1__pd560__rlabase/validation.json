@@ -1,0 +1,13 @@
+{
+  "run_id": "gcd__clk460ps__abc1__pd560__rlabase",
+  "passed": true,
+  "issues": [],
+  "stats": {
+    "num_nodes": 1826,
+    "num_edges": 2207,
+    "num_labels": 1826,
+    "finite_slack_coverage": 0.97973713033954,
+    "min_label_slack_s": -5.158090621293354e-11,
+    "wns_ns": -0.05
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "seed": 42,
+  "fractions": {
+    "train": 0.7,
+    "val": 0.15,
+    "test": 0.15
+  },
+  "train": [
+    "aes__clk738ps__abc0__pd500__rlabase",
+    "aes__clk738ps__abc0__pd560__rla035",
+    "aes__clk738ps__abc1__pd560__rlabase",
+    "aes__clk820ps__abc0__pd500__rlabase",
+    "aes__clk820ps__abc0__pd560__rlabase",
+    "aes__clk820ps__abc1__pd500__rlabase",
+    "aes__clk820ps__abc1__pd560__rlabase",
+    "aes__clk902ps__abc0__pd500__rla035",
+    "aes__clk902ps__abc0__pd560__rla035",
+    "aes__clk902ps__abc0__pd560__rlabase",
+    "aes__clk902ps__abc1__pd500__rlabase",
+    "gcd__clk414ps__abc0__pd500__rlabase",
+    "gcd__clk414ps__abc0__pd560__rla035",
+    "gcd__clk414ps__abc0__pd560__rlabase",
+    "gcd__clk414ps__abc1__pd500__rlabase",
+    "gcd__clk414ps__abc1__pd560__rlabase",
+    "gcd__clk460ps__abc0__pd500__rlabase",
+    "gcd__clk506ps__abc0__pd500__rla035",
+    "gcd__clk506ps__abc0__pd500__rlabase",
+    "gcd__clk506ps__abc0__pd560__rla035",
+    "gcd__clk506ps__abc0__pd560__rlabase",
+    "gcd__clk506ps__abc1__pd560__rlabase"
+  ],
+  "val": [
+    "aes__clk738ps__abc1__pd500__rlabase",
+    "aes__clk902ps__abc1__pd560__rlabase",
+    "gcd__clk414ps__abc0__pd500__rla035",
+    "gcd__clk506ps__abc1__pd500__rlabase"
+  ],
+  "test": [
+    "aes__clk738ps__abc0__pd500__rla035",
+    "aes__clk738ps__abc0__pd560__rlabase",
+    "aes__clk902ps__abc0__pd500__rlabase",
+    "gcd__clk460ps__abc0__pd560__rlabase",
+    "gcd__clk460ps__abc1__pd500__rlabase",
+    "gcd__clk460ps__abc1__pd560__rlabase"
+  ]
+}

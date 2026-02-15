@@ -1,0 +1,13 @@
+{
+  "run_id": "gcd__clk506ps__abc0__pd500__rlabase",
+  "passed": true,
+  "issues": [],
+  "stats": {
+    "num_nodes": 1608,
+    "num_edges": 1980,
+    "num_labels": 1608,
+    "finite_slack_coverage": 0.9776119402985075,
+    "min_label_slack_s": -2.8856306233393525e-10,
+    "wns_ns": -0.29
+  }
+}

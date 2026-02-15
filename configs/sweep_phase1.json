@@ -1,0 +1,335 @@
+{
+  "platform": "nangate45",
+  "openroad_bin": "OpenROAD-flow-scripts/tools/install/OpenROAD/bin/openroad",
+  "orfs_flow_dir": "OpenROAD-flow-scripts/flow",
+  "liberty": "OpenROAD-flow-scripts/flow/platforms/nangate45/lib/NangateOpenCellLibrary_typical.lib",
+  "template_sdc": {
+    "gcd": "configs/sdc_templates/gcd_constraint.sdc",
+    "aes": "configs/sdc_templates/aes_constraint.sdc"
+  },
+  "generated_sdc_dir": "configs/sdc_generated",
+  "default_make_jobs": 2,
+  "default_num_cores": 4,
+  "runs": [
+    {
+      "run_id": "gcd__clk414ps__abc0__pd500__rlabase",
+      "design": "gcd",
+      "clock_scale": 0.9,
+      "clock_period_ns": 0.414,
+      "abc_area": 0,
+      "place_density": 0.5,
+      "routing_layer_adjustment": null,
+      "variant": "gcd__clk414ps__abc0__pd500__rlabase"
+    },
+    {
+      "run_id": "gcd__clk414ps__abc0__pd560__rlabase",
+      "design": "gcd",
+      "clock_scale": 0.9,
+      "clock_period_ns": 0.414,
+      "abc_area": 0,
+      "place_density": 0.56,
+      "routing_layer_adjustment": null,
+      "variant": "gcd__clk414ps__abc0__pd560__rlabase"
+    },
+    {
+      "run_id": "gcd__clk414ps__abc1__pd500__rlabase",
+      "design": "gcd",
+      "clock_scale": 0.9,
+      "clock_period_ns": 0.414,
+      "abc_area": 1,
+      "place_density": 0.5,
+      "routing_layer_adjustment": null,
+      "variant": "gcd__clk414ps__abc1__pd500__rlabase"
+    },
+    {
+      "run_id": "gcd__clk414ps__abc1__pd560__rlabase",
+      "design": "gcd",
+      "clock_scale": 0.9,
+      "clock_period_ns": 0.414,
+      "abc_area": 1,
+      "place_density": 0.56,
+      "routing_layer_adjustment": null,
+      "variant": "gcd__clk414ps__abc1__pd560__rlabase"
+    },
+    {
+      "run_id": "gcd__clk460ps__abc0__pd500__rlabase",
+      "design": "gcd",
+      "clock_scale": 1.0,
+      "clock_period_ns": 0.46,
+      "abc_area": 0,
+      "place_density": 0.5,
+      "routing_layer_adjustment": null,
+      "variant": "gcd__clk460ps__abc0__pd500__rlabase"
+    },
+    {
+      "run_id": "gcd__clk460ps__abc0__pd560__rlabase",
+      "design": "gcd",
+      "clock_scale": 1.0,
+      "clock_period_ns": 0.46,
+      "abc_area": 0,
+      "place_density": 0.56,
+      "routing_layer_adjustment": null,
+      "variant": "gcd__clk460ps__abc0__pd560__rlabase"
+    },
+    {
+      "run_id": "gcd__clk460ps__abc1__pd500__rlabase",
+      "design": "gcd",
+      "clock_scale": 1.0,
+      "clock_period_ns": 0.46,
+      "abc_area": 1,
+      "place_density": 0.5,
+      "routing_layer_adjustment": null,
+      "variant": "gcd__clk460ps__abc1__pd500__rlabase"
+    },
+    {
+      "run_id": "gcd__clk460ps__abc1__pd560__rlabase",
+      "design": "gcd",
+      "clock_scale": 1.0,
+      "clock_period_ns": 0.46,
+      "abc_area": 1,
+      "place_density": 0.56,
+      "routing_layer_adjustment": null,
+      "variant": "gcd__clk460ps__abc1__pd560__rlabase"
+    },
+    {
+      "run_id": "gcd__clk506ps__abc0__pd500__rlabase",
+      "design": "gcd",
+      "clock_scale": 1.1,
+      "clock_period_ns": 0.506,
+      "abc_area": 0,
+      "place_density": 0.5,
+      "routing_layer_adjustment": null,
+      "variant": "gcd__clk506ps__abc0__pd500__rlabase"
+    },
+    {
+      "run_id": "gcd__clk506ps__abc0__pd560__rlabase",
+      "design": "gcd",
+      "clock_scale": 1.1,
+      "clock_period_ns": 0.506,
+      "abc_area": 0,
+      "place_density": 0.56,
+      "routing_layer_adjustment": null,
+      "variant": "gcd__clk506ps__abc0__pd560__rlabase"
+    },
+    {
+      "run_id": "gcd__clk506ps__abc1__pd500__rlabase",
+      "design": "gcd",
+      "clock_scale": 1.1,
+      "clock_period_ns": 0.506,
+      "abc_area": 1,
+      "place_density": 0.5,
+      "routing_layer_adjustment": null,
+      "variant": "gcd__clk506ps__abc1__pd500__rlabase"
+    },
+    {
+      "run_id": "gcd__clk506ps__abc1__pd560__rlabase",
+      "design": "gcd",
+      "clock_scale": 1.1,
+      "clock_period_ns": 0.506,
+      "abc_area": 1,
+      "place_density": 0.56,
+      "routing_layer_adjustment": null,
+      "variant": "gcd__clk506ps__abc1__pd560__rlabase"
+    },
+    {
+      "run_id": "aes__clk738ps__abc0__pd500__rlabase",
+      "design": "aes",
+      "clock_scale": 0.9,
+      "clock_period_ns": 0.738,
+      "abc_area": 0,
+      "place_density": 0.5,
+      "routing_layer_adjustment": null,
+      "variant": "aes__clk738ps__abc0__pd500__rlabase"
+    },
+    {
+      "run_id": "aes__clk738ps__abc0__pd560__rlabase",
+      "design": "aes",
+      "clock_scale": 0.9,
+      "clock_period_ns": 0.738,
+      "abc_area": 0,
+      "place_density": 0.56,
+      "routing_layer_adjustment": null,
+      "variant": "aes__clk738ps__abc0__pd560__rlabase"
+    },
+    {
+      "run_id": "aes__clk738ps__abc1__pd500__rlabase",
+      "design": "aes",
+      "clock_scale": 0.9,
+      "clock_period_ns": 0.738,
+      "abc_area": 1,
+      "place_density": 0.5,
+      "routing_layer_adjustment": null,
+      "variant": "aes__clk738ps__abc1__pd500__rlabase"
+    },
+    {
+      "run_id": "aes__clk738ps__abc1__pd560__rlabase",
+      "design": "aes",
+      "clock_scale": 0.9,
+      "clock_period_ns": 0.738,
+      "abc_area": 1,
+      "place_density": 0.56,
+      "routing_layer_adjustment": null,
+      "variant": "aes__clk738ps__abc1__pd560__rlabase"
+    },
+    {
+      "run_id": "aes__clk820ps__abc0__pd500__rlabase",
+      "design": "aes",
+      "clock_scale": 1.0,
+      "clock_period_ns": 0.82,
+      "abc_area": 0,
+      "place_density": 0.5,
+      "routing_layer_adjustment": null,
+      "variant": "aes__clk820ps__abc0__pd500__rlabase"
+    },
+    {
+      "run_id": "aes__clk820ps__abc0__pd560__rlabase",
+      "design": "aes",
+      "clock_scale": 1.0,
+      "clock_period_ns": 0.82,
+      "abc_area": 0,
+      "place_density": 0.56,
+      "routing_layer_adjustment": null,
+      "variant": "aes__clk820ps__abc0__pd560__rlabase"
+    },
+    {
+      "run_id": "aes__clk820ps__abc1__pd500__rlabase",
+      "design": "aes",
+      "clock_scale": 1.0,
+      "clock_period_ns": 0.82,
+      "abc_area": 1,
+      "place_density": 0.5,
+      "routing_layer_adjustment": null,
+      "variant": "aes__clk820ps__abc1__pd500__rlabase"
+    },
+    {
+      "run_id": "aes__clk820ps__abc1__pd560__rlabase",
+      "design": "aes",
+      "clock_scale": 1.0,
+      "clock_period_ns": 0.82,
+      "abc_area": 1,
+      "place_density": 0.56,
+      "routing_layer_adjustment": null,
+      "variant": "aes__clk820ps__abc1__pd560__rlabase"
+    },
+    {
+      "run_id": "aes__clk902ps__abc0__pd500__rlabase",
+      "design": "aes",
+      "clock_scale": 1.1,
+      "clock_period_ns": 0.902,
+      "abc_area": 0,
+      "place_density": 0.5,
+      "routing_layer_adjustment": null,
+      "variant": "aes__clk902ps__abc0__pd500__rlabase"
+    },
+    {
+      "run_id": "aes__clk902ps__abc0__pd560__rlabase",
+      "design": "aes",
+      "clock_scale": 1.1,
+      "clock_period_ns": 0.902,
+      "abc_area": 0,
+      "place_density": 0.56,
+      "routing_layer_adjustment": null,
+      "variant": "aes__clk902ps__abc0__pd560__rlabase"
+    },
+    {
+      "run_id": "aes__clk902ps__abc1__pd500__rlabase",
+      "design": "aes",
+      "clock_scale": 1.1,
+      "clock_period_ns": 0.902,
+      "abc_area": 1,
+      "place_density": 0.5,
+      "routing_layer_adjustment": null,
+      "variant": "aes__clk902ps__abc1__pd500__rlabase"
+    },
+    {
+      "run_id": "aes__clk902ps__abc1__pd560__rlabase",
+      "design": "aes",
+      "clock_scale": 1.1,
+      "clock_period_ns": 0.902,
+      "abc_area": 1,
+      "place_density": 0.56,
+      "routing_layer_adjustment": null,
+      "variant": "aes__clk902ps__abc1__pd560__rlabase"
+    },
+    {
+      "run_id": "gcd__clk414ps__abc0__pd500__rla035",
+      "design": "gcd",
+      "clock_scale": 0.9,
+      "clock_period_ns": 0.414,
+      "abc_area": 0,
+      "place_density": 0.5,
+      "routing_layer_adjustment": 0.35,
+      "variant": "gcd__clk414ps__abc0__pd500__rla035"
+    },
+    {
+      "run_id": "gcd__clk414ps__abc0__pd560__rla035",
+      "design": "gcd",
+      "clock_scale": 0.9,
+      "clock_period_ns": 0.414,
+      "abc_area": 0,
+      "place_density": 0.56,
+      "routing_layer_adjustment": 0.35,
+      "variant": "gcd__clk414ps__abc0__pd560__rla035"
+    },
+    {
+      "run_id": "gcd__clk506ps__abc0__pd500__rla035",
+      "design": "gcd",
+      "clock_scale": 1.1,
+      "clock_period_ns": 0.506,
+      "abc_area": 0,
+      "place_density": 0.5,
+      "routing_layer_adjustment": 0.35,
+      "variant": "gcd__clk506ps__abc0__pd500__rla035"
+    },
+    {
+      "run_id": "gcd__clk506ps__abc0__pd560__rla035",
+      "design": "gcd",
+      "clock_scale": 1.1,
+      "clock_period_ns": 0.506,
+      "abc_area": 0,
+      "place_density": 0.56,
+      "routing_layer_adjustment": 0.35,
+      "variant": "gcd__clk506ps__abc0__pd560__rla035"
+    },
+    {
+      "run_id": "aes__clk738ps__abc0__pd500__rla035",
+      "design": "aes",
+      "clock_scale": 0.9,
+      "clock_period_ns": 0.738,
+      "abc_area": 0,
+      "place_density": 0.5,
+      "routing_layer_adjustment": 0.35,
+      "variant": "aes__clk738ps__abc0__pd500__rla035"
+    },
+    {
+      "run_id": "aes__clk738ps__abc0__pd560__rla035",
+      "design": "aes",
+      "clock_scale": 0.9,
+      "clock_period_ns": 0.738,
+      "abc_area": 0,
+      "place_density": 0.56,
+      "routing_layer_adjustment": 0.35,
+      "variant": "aes__clk738ps__abc0__pd560__rla035"
+    },
+    {
+      "run_id": "aes__clk902ps__abc0__pd500__rla035",
+      "design": "aes",
+      "clock_scale": 1.1,
+      "clock_period_ns": 0.902,
+      "abc_area": 0,
+      "place_density": 0.5,
+      "routing_layer_adjustment": 0.35,
+      "variant": "aes__clk902ps__abc0__pd500__rla035"
+    },
+    {
+      "run_id": "aes__clk902ps__abc0__pd560__rla035",
+      "design": "aes",
+      "clock_scale": 1.1,
+      "clock_period_ns": 0.902,
+      "abc_area": 0,
+      "place_density": 0.56,
+      "routing_layer_adjustment": 0.35,
+      "variant": "aes__clk902ps__abc0__pd560__rla035"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+# Keep ORFS checkout/tools out of this project repo
+OpenROAD-flow-scripts/
+
+# Python
+__pycache__/
+*.pyc
+
+# Local logs and temporary files
+logs/pipeline/*.log
+*.tmp

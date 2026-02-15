@@ -1,0 +1,13 @@
+{
+  "run_id": "aes__clk738ps__abc0__pd560__rla035",
+  "passed": true,
+  "issues": [],
+  "stats": {
+    "num_nodes": 62084,
+    "num_edges": 83666,
+    "num_labels": 62084,
+    "finite_slack_coverage": 0.9897236002834869,
+    "min_label_slack_s": -5.900668842429013e-11,
+    "wns_ns": -0.06
+  }
+}

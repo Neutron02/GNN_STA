@@ -1,0 +1,19 @@
+{
+  "run_id": "gcd__clk506ps__abc0__pd560__rla035",
+  "design": "gcd",
+  "platform": "nangate45",
+  "clock_period_ns": 0.506,
+  "abc_area": 0,
+  "place_density": 0.56,
+  "routing_layer_adjustment": 0.35,
+  "num_nodes": 1608,
+  "num_edges": 1980,
+  "num_net_edges": 1035,
+  "num_cell_arc_edges": 945,
+  "num_rcx_joined_net_edges": 926,
+  "tns_ns": -10.04,
+  "wns_ns": -0.29,
+  "worst_slack_ns": -0.29,
+  "critical_path_delay_ns": -41.620998,
+  "critical_path_slack_ns": -0.2886
+}
