@@ -12,3 +12,4 @@ logs/pipeline/*.log
 
 # ML training artifacts
 results/train_runs/
+results/sweeps/

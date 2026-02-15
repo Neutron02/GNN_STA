@@ -238,6 +238,14 @@ python3 scripts/eval_gnn_multitask.py \
   --splits data/manifests/splits.json
 ```
 
+Automated multi-task hyperparameter sweep + leaderboard:
+```bash
+python3 scripts/sweep_multitask.py \
+  --config configs/ml_sweep_mt_holdout_v1.json \
+  --jobs 2 \
+  --resume
+```
+
 ## Dataset Schemas
 ### `nodes.csv`
 - `node_id`, `node_name`, `node_kind`

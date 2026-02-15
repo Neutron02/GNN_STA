@@ -1,0 +1,146 @@
+{
+  "sweep_name": "mt_holdout_v1",
+  "jobs": 2,
+  "train_script": "scripts/train_gnn_multitask.py",
+  "train_out_dir": "results/train_runs",
+  "leaderboard_metric": "test_rmse_ps",
+  "leaderboard_maximize": false,
+  "base_args": {
+    "eval_mode": "holdout_design",
+    "train_design": "gcd",
+    "eval_design": "aes",
+    "target_cols": "arrival_setup_scalar_s,slack_setup_scalar_s,required_setup_scalar_s",
+    "primary_target_col": "slack_setup_scalar_s",
+    "arrival_col": "arrival_setup_scalar_s",
+    "slack_col": "slack_setup_scalar_s",
+    "required_col": "required_setup_scalar_s",
+    "target_scale": 1000000000000.0,
+    "batch_graphs": 2,
+    "loss_nodes_per_graph_train": 2048,
+    "loss_nodes_per_graph_eval": 0,
+    "hidden_dim": 128,
+    "message_steps": 3,
+    "dropout": 0.1,
+    "cell_emb_dim": 16,
+    "cell_vocab_min_count": 1,
+    "lr": 0.001,
+    "weight_decay": 0.00001,
+    "epochs": 24,
+    "early_stop_patience": 6,
+    "rank_pairs": 1024,
+    "rank_margin_norm": 0.05,
+    "critical_threshold_ps": 0.0,
+    "seed": 42,
+    "device": "auto"
+  },
+  "trials": [
+    {
+      "name": "tw050_c0_r0",
+      "args": {
+        "target_weights": "0.5,1.0,0.5",
+        "consistency_weight": 0.0,
+        "rank_loss_weight": 0.0,
+        "critical_loss_weight": 1.0
+      }
+    },
+    {
+      "name": "tw070_c0_r0",
+      "args": {
+        "target_weights": "0.7,1.0,0.7",
+        "consistency_weight": 0.0,
+        "rank_loss_weight": 0.0,
+        "critical_loss_weight": 1.0
+      }
+    },
+    {
+      "name": "tw100_c0_r0",
+      "args": {
+        "target_weights": "1.0,1.0,1.0",
+        "consistency_weight": 0.0,
+        "rank_loss_weight": 0.0,
+        "critical_loss_weight": 1.0
+      }
+    },
+    {
+      "name": "tw070_c1e4_r001",
+      "args": {
+        "target_weights": "0.7,1.0,0.7",
+        "consistency_weight": 0.0001,
+        "rank_loss_weight": 0.01,
+        "critical_loss_weight": 1.0
+      }
+    },
+    {
+      "name": "tw070_c1e4_r002",
+      "args": {
+        "target_weights": "0.7,1.0,0.7",
+        "consistency_weight": 0.0001,
+        "rank_loss_weight": 0.02,
+        "critical_loss_weight": 1.0
+      }
+    },
+    {
+      "name": "tw070_c1e4_r003",
+      "args": {
+        "target_weights": "0.7,1.0,0.7",
+        "consistency_weight": 0.0001,
+        "rank_loss_weight": 0.03,
+        "critical_loss_weight": 1.0
+      }
+    },
+    {
+      "name": "tw070_c5e4_r002",
+      "args": {
+        "target_weights": "0.7,1.0,0.7",
+        "consistency_weight": 0.0005,
+        "rank_loss_weight": 0.02,
+        "critical_loss_weight": 1.0
+      }
+    },
+    {
+      "name": "tw070_c0_r002",
+      "args": {
+        "target_weights": "0.7,1.0,0.7",
+        "consistency_weight": 0.0,
+        "rank_loss_weight": 0.02,
+        "critical_loss_weight": 1.0
+      }
+    },
+    {
+      "name": "tw050_c1e4_r002",
+      "args": {
+        "target_weights": "0.5,1.0,0.5",
+        "consistency_weight": 0.0001,
+        "rank_loss_weight": 0.02,
+        "critical_loss_weight": 1.0
+      }
+    },
+    {
+      "name": "tw100_c1e4_r002",
+      "args": {
+        "target_weights": "1.0,1.0,1.0",
+        "consistency_weight": 0.0001,
+        "rank_loss_weight": 0.02,
+        "critical_loss_weight": 1.0
+      }
+    },
+    {
+      "name": "tw070_c1e4_r002_crit2",
+      "args": {
+        "target_weights": "0.7,1.0,0.7",
+        "consistency_weight": 0.0001,
+        "rank_loss_weight": 0.02,
+        "critical_loss_weight": 2.0
+      }
+    },
+    {
+      "name": "tw070_c1e4_r002_crit3",
+      "args": {
+        "target_weights": "0.7,1.0,0.7",
+        "consistency_weight": 0.0001,
+        "rank_loss_weight": 0.02,
+        "critical_loss_weight": 3.0
+      }
+    }
+  ]
+}
