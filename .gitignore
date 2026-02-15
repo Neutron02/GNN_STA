@@ -4,6 +4,7 @@ OpenROAD-flow-scripts/
 # Python
 __pycache__/
 *.pyc
+.venv/
 
 # Local logs and temporary files
 logs/pipeline/*.log
