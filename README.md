@@ -148,7 +148,8 @@ python3 scripts/gnn_smoke_test.py \
 ```
 
 ## PyTorch Training/Evaluation (Production Path)
-This is the real neural training stack (message-passing model + AdamW + checkpoints).
+This is the real neural training stack (message-passing neural network + AdamW + checkpoints).
+`TimingMPNN` is already a neural network; you can optionally enable a hybrid variant that adds learned categorical embeddings for cell types (`--cell-emb-dim`).
 
 Prerequisite:
 - Install PyTorch in your Python environment.
@@ -172,6 +173,7 @@ python3 scripts/train_gnn.py \
   --batch-graphs 2 \
   --hidden-dim 128 \
   --message-steps 3 \
+  --cell-emb-dim 16 \
   --epochs 50 \
   --early-stop-patience 10
 ```
@@ -187,13 +189,50 @@ python3 scripts/train_gnn.py \
   --batch-graphs 2 \
   --hidden-dim 128 \
   --message-steps 3 \
+  --cell-emb-dim 16 \
   --epochs 50 \
   --early-stop-patience 10
+```
+
+Optional critical-node weighted loss (emphasize nodes at/under setup limit):
+```bash
+python3 scripts/train_gnn.py \
+  --eval-mode holdout_design \
+  --train-design gcd \
+  --eval-design aes \
+  --target-col slack_setup_scalar_s \
+  --target-scale 1e12 \
+  --cell-emb-dim 16 \
+  --critical-loss-weight 3.0 \
+  --critical-threshold-ps 0.0
 ```
 
 Evaluate a saved checkpoint:
 ```bash
 python3 scripts/eval_gnn.py \
+  --checkpoint results/train_runs/<run_name>/best.pt \
+  --dataset-index data/manifests/dataset_index.csv \
+  --splits data/manifests/splits.json
+```
+
+Multi-task training (arrival + slack + required, shared GNN encoder):
+```bash
+python3 scripts/train_gnn_multitask.py \
+  --eval-mode holdout_design \
+  --train-design gcd \
+  --eval-design aes \
+  --target-cols arrival_setup_scalar_s,slack_setup_scalar_s,required_setup_scalar_s \
+  --primary-target-col slack_setup_scalar_s \
+  --target-weights 0.7,1.0,0.7 \
+  --cell-emb-dim 16 \
+  --consistency-weight 1e-4 \
+  --rank-loss-weight 0.02 \
+  --epochs 60
+```
+
+Evaluate a multi-task checkpoint:
+```bash
+python3 scripts/eval_gnn_multitask.py \
   --checkpoint results/train_runs/<run_name>/best.pt \
   --dataset-index data/manifests/dataset_index.csv \
   --splits data/manifests/splits.json

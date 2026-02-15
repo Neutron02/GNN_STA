@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate a trained timing GNN checkpoint."""
+"""Evaluate a multi-task timing GNN checkpoint."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ from pathlib import Path
 
 from ml_models import TimingMPNN, require_torch as require_torch_models
 from ml_training_common import (
-    NormalizationStats,
-    apply_normalization,
-    apply_cell_type_encoding,
-    evaluate_model,
+    MultiNormalizationStats,
+    apply_cell_type_encoding_multi,
+    apply_normalization_multi,
+    evaluate_model_multi,
     load_dataset_index,
-    load_graph,
+    load_graph_multi,
     load_splits,
     require_torch,
     select_rows,
@@ -45,7 +45,7 @@ def _print_block(name: str, m: dict) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Evaluate trained timing GNN checkpoint")
+    ap = argparse.ArgumentParser(description="Evaluate trained multi-task timing GNN checkpoint")
     ap.add_argument("--checkpoint", required=True, help="Path to best.pt or last.pt")
     ap.add_argument("--dataset-index", default="data/manifests/dataset_index.csv")
     ap.add_argument("--splits", default="data/manifests/splits.json")
@@ -53,7 +53,6 @@ def main() -> None:
     ap.add_argument("--design", default=None)
     ap.add_argument("--train-design", default=None)
     ap.add_argument("--eval-design", default=None)
-    ap.add_argument("--target-col", default=None)
     ap.add_argument("--max-train-runs", type=int, default=0)
     ap.add_argument("--max-val-runs", type=int, default=0)
     ap.add_argument("--max-test-runs", type=int, default=0)
@@ -66,25 +65,28 @@ def main() -> None:
 
     require_torch()
     require_torch_models()
-
     if torch is None:
         raise RuntimeError("PyTorch is unavailable in this Python environment.")
 
     ckpt_path = Path(args.checkpoint)
     ckpt = torch.load(ckpt_path, map_location="cpu")
-
     train_args = ckpt.get("args", {})
+
     eval_mode = args.eval_mode or train_args.get("eval_mode", "within_design")
     design = args.design or train_args.get("design", "gcd")
     train_design = args.train_design or train_args.get("train_design", "gcd")
     eval_design = args.eval_design or train_args.get("eval_design", "aes")
-    target_col = args.target_col or train_args.get("target_col", "slack_setup_scalar_s")
     batch_graphs = args.batch_graphs or int(train_args.get("batch_graphs", 2))
     loss_nodes_per_graph_eval = (
         args.loss_nodes_per_graph_eval
         if args.loss_nodes_per_graph_eval is not None
         else int(train_args.get("loss_nodes_per_graph_eval", 0))
     )
+
+    target_cols = list(ckpt.get("target_cols", []))
+    if not target_cols:
+        raise RuntimeError("Checkpoint missing target_cols; use eval_gnn.py for single-target checkpoints.")
+    primary_idx = int(ckpt.get("primary_target_idx", 0))
 
     dataset_index = load_dataset_index(Path(args.dataset_index))
     splits = load_splits(Path(args.splits))
@@ -99,20 +101,14 @@ def main() -> None:
         max_val_runs=args.max_val_runs,
         max_test_runs=args.max_test_runs,
     )
-
     if not train_rows or not val_rows or not test_rows:
         raise SystemExit("Row selection returned empty split(s).")
 
-    stats = NormalizationStats.from_dict(ckpt["normalization"])
+    stats = MultiNormalizationStats.from_dict(ckpt["normalization"])
     model_cfg = ckpt["model_cfg"]
     cell_vocab = ckpt.get("cell_type_vocab", {})
     if not isinstance(cell_vocab, dict):
         cell_vocab = {}
-    model_state = ckpt["model_state"]
-    has_msg_gate = any(str(k).startswith("msg_gate.") for k in model_state.keys())
-    has_update_norm = any(str(k).startswith("update_norm.") for k in model_state.keys())
-    use_message_gate = bool(model_cfg.get("use_message_gate", has_msg_gate))
-    use_layer_norm = bool(model_cfg.get("use_layer_norm", has_update_norm))
 
     device = _resolve_device(args.device)
     model = TimingMPNN(
@@ -123,51 +119,55 @@ def main() -> None:
         dropout=float(model_cfg["dropout"]),
         cell_emb_dim=int(model_cfg.get("cell_emb_dim", 0)),
         cell_type_vocab_size=int(model_cfg.get("cell_type_vocab_size", len(cell_vocab))),
-        use_message_gate=use_message_gate,
-        use_layer_norm=use_layer_norm,
+        use_message_gate=bool(model_cfg.get("use_message_gate", True)),
+        use_layer_norm=bool(model_cfg.get("use_layer_norm", True)),
+        out_dim=int(model_cfg.get("out_dim", len(target_cols))),
     ).to(device)
-    model.load_state_dict(model_state)
+    model.load_state_dict(ckpt["model_state"])
 
-    train_graphs = [load_graph(r, target_col) for r in train_rows]
-    val_graphs = [load_graph(r, target_col) for r in val_rows]
-    test_graphs = [load_graph(r, target_col) for r in test_rows]
+    train_graphs = [load_graph_multi(r, target_cols) for r in train_rows]
+    val_graphs = [load_graph_multi(r, target_cols) for r in val_rows]
+    test_graphs = [load_graph_multi(r, target_cols) for r in test_rows]
 
     if int(model_cfg.get("cell_emb_dim", 0)) > 0:
         if not cell_vocab:
             raise RuntimeError("Checkpoint requires cell embeddings, but no cell_type_vocab found.")
-        apply_cell_type_encoding(train_graphs, cell_vocab)
-        apply_cell_type_encoding(val_graphs, cell_vocab)
-        apply_cell_type_encoding(test_graphs, cell_vocab)
+        apply_cell_type_encoding_multi(train_graphs, cell_vocab)
+        apply_cell_type_encoding_multi(val_graphs, cell_vocab)
+        apply_cell_type_encoding_multi(test_graphs, cell_vocab)
 
-    apply_normalization(train_graphs, stats)
-    apply_normalization(val_graphs, stats)
-    apply_normalization(test_graphs, stats)
+    apply_normalization_multi(train_graphs, stats)
+    apply_normalization_multi(val_graphs, stats)
+    apply_normalization_multi(test_graphs, stats)
 
-    train_metrics = evaluate_model(
+    train_metrics = evaluate_model_multi(
         model=model,
         graphs=train_graphs,
         stats=stats,
         device=device,
         batch_graphs=batch_graphs,
         loss_nodes_per_graph=loss_nodes_per_graph_eval,
+        primary_idx=primary_idx,
         seed=args.seed + 1,
     )
-    val_metrics = evaluate_model(
+    val_metrics = evaluate_model_multi(
         model=model,
         graphs=val_graphs,
         stats=stats,
         device=device,
         batch_graphs=batch_graphs,
         loss_nodes_per_graph=loss_nodes_per_graph_eval,
+        primary_idx=primary_idx,
         seed=args.seed + 3,
     )
-    test_metrics = evaluate_model(
+    test_metrics = evaluate_model_multi(
         model=model,
         graphs=test_graphs,
         stats=stats,
         device=device,
         batch_graphs=batch_graphs,
         loss_nodes_per_graph=loss_nodes_per_graph_eval,
+        primary_idx=primary_idx,
         seed=args.seed + 5,
     )
 
@@ -180,6 +180,8 @@ def main() -> None:
     payload = {
         "eval_tag": eval_tag,
         "checkpoint": str(ckpt_path.resolve()),
+        "target_cols": target_cols,
+        "primary_target_idx": primary_idx,
         "train_metrics": train_metrics,
         "val_metrics": val_metrics,
         "test_metrics": test_metrics,
