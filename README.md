@@ -147,6 +147,58 @@ python3 scripts/gnn_smoke_test.py \
   --target-scale 1e12
 ```
 
+## PyTorch Training/Evaluation (Production Path)
+This is the real neural training stack (message-passing model + AdamW + checkpoints).
+
+Prerequisite:
+- Install PyTorch in your Python environment.
+- A minimal dependency list is in `requirements-ml.txt`.
+
+Example setup:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install --upgrade pip
+python3 -m pip install -r requirements-ml.txt
+```
+
+Train within-design (`gcd`):
+```bash
+python3 scripts/train_gnn.py \
+  --eval-mode within_design \
+  --design gcd \
+  --target-col slack_setup_scalar_s \
+  --target-scale 1e12 \
+  --batch-graphs 2 \
+  --hidden-dim 128 \
+  --message-steps 3 \
+  --epochs 50 \
+  --early-stop-patience 10
+```
+
+Train with unseen-design holdout (train on `gcd`, test on `aes`):
+```bash
+python3 scripts/train_gnn.py \
+  --eval-mode holdout_design \
+  --train-design gcd \
+  --eval-design aes \
+  --target-col slack_setup_scalar_s \
+  --target-scale 1e12 \
+  --batch-graphs 2 \
+  --hidden-dim 128 \
+  --message-steps 3 \
+  --epochs 50 \
+  --early-stop-patience 10
+```
+
+Evaluate a saved checkpoint:
+```bash
+python3 scripts/eval_gnn.py \
+  --checkpoint results/train_runs/<run_name>/best.pt \
+  --dataset-index data/manifests/dataset_index.csv \
+  --splits data/manifests/splits.json
+```
+
 ## Dataset Schemas
 ### `nodes.csv`
 - `node_id`, `node_name`, `node_kind`
