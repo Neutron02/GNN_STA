@@ -115,15 +115,37 @@ Quick architecture sanity check with a tiny message-passing regressor (pure Pyth
 
 ```bash
 python3 scripts/gnn_smoke_test.py \
+  --eval-mode within_design \
   --design gcd \
   --max-train-runs 4 \
   --max-val-runs 2 \
+  --max-test-runs 2 \
   --epochs 8 \
   --loss-nodes-per-graph 512 \
-  --message-steps 2
+  --message-steps 2 \
+  --target-scale 1e12
 ```
 
-This should print decreasing train/val MSE across epochs if the graph + label pipeline is coherent.
+Notes:
+- `--target-scale 1e12` converts second-scale labels to picoseconds before z-score normalization.
+- Feature normalization and target normalization are computed from training runs only.
+- Output includes normalized MSE and physical RMSE/MAE in picoseconds.
+
+Unseen-design holdout check (train on `gcd`, test on `aes`):
+
+```bash
+python3 scripts/gnn_smoke_test.py \
+  --eval-mode holdout_design \
+  --train-design gcd \
+  --eval-design aes \
+  --max-train-runs 4 \
+  --max-val-runs 2 \
+  --max-test-runs 2 \
+  --epochs 8 \
+  --loss-nodes-per-graph 512 \
+  --message-steps 2 \
+  --target-scale 1e12
+```
 
 ## Dataset Schemas
 ### `nodes.csv`
