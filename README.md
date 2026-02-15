@@ -110,6 +110,21 @@ For each successful run `data/processed/<run_id>/` contains:
 - `dataset_index.csv`
 - `splits.json`
 
+## ML Smoke Test (Dependency-Free)
+Quick architecture sanity check with a tiny message-passing regressor (pure Python, no extra packages):
+
+```bash
+python3 scripts/gnn_smoke_test.py \
+  --design gcd \
+  --max-train-runs 4 \
+  --max-val-runs 2 \
+  --epochs 8 \
+  --loss-nodes-per-graph 512 \
+  --message-steps 2
+```
+
+This should print decreasing train/val MSE across epochs if the graph + label pipeline is coherent.
+
 ## Dataset Schemas
 ### `nodes.csv`
 - `node_id`, `node_name`, `node_kind`
