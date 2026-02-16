@@ -2,6 +2,104 @@
 
 This repository contains a reproducible phase-1 data pipeline for pin-level timing graph extraction from OpenROAD/OpenSTA results.
 
+## LLM Handoff Snapshot (2026-02-16)
+Use this section as the canonical context for resuming work on another machine.
+
+### Problem
+- Predict STA quantities (`arrival`, `slack`, `required`) from placed+routed circuit structure without running full OpenSTA for each optimization loop.
+- Support fast ML inference for design-space exploration and ML-guided optimization.
+- Generalize across different designs (not only variants of one design).
+
+### Goals
+- Build a reproducible dataset pipeline from ORFS/OpenROAD artifacts.
+- Train/evaluate neural timing predictors on pin-level timing graphs.
+- Improve cross-design holdout accuracy (current primary check: train on `gcd`, test on `aes` at `nangate45`).
+- Preserve path-critical behavior, not only average node-level error.
+
+### What Is Implemented
+- End-to-end dataset pipeline for 32 planned runs on `gcd` + `aes` with parameter sweeps.
+- Curated raw artifacts + processed graph/label/path outputs + manifests.
+- Multiple ML training/eval stacks:
+- `scripts/train_gnn.py` and `scripts/train_gnn_multitask.py` (baseline and multitask).
+- `scripts/train_hetero_dualpass.py` (heterogeneous dual-pass variant).
+- `scripts/train_tripath_dualpass.py` + `scripts/eval_tripath_dualpass.py` (tripartite pin/cell/net model).
+- Tripartite model upgrades:
+- Dual-pass timing propagation.
+- Edge-conditioned message passing using per-edge RC/fanout/length features.
+- Path endpoint supervision support.
+- Global conditioning restricted to sweep knobs (`clock_period_ns`, `abc_area`, `place_density`, `routing_layer_adjustment`) to avoid design-ID leakage.
+
+### Dataset Status
+- `data/manifests/runs.csv`: 32/32 runs are `success`.
+- `data/manifests/dataset_index.csv`: 32 extracted runs indexed.
+- Design balance: 16 `gcd` + 16 `aes`.
+
+### Current Best Results (Holdout: train `gcd` -> test `aes`)
+- Best overall node-slack RMSE so far:
+- Run: `mt_holdout_v1__tw070_c5e4_r002` (from `results/sweeps/mt_holdout_v1/leaderboard.csv`)
+- Test slack RMSE: `141.4446 ps`
+- Test WNS MAE: `90.1341 ps`
+- Best tripartite edge-conditioned run:
+- Run: `holdout_tripath_dualpass_edgecond_fastv1` (from `results/train_runs/holdout_tripath_dualpass_edgecond_fastv1/eval_best.json`)
+- Test slack RMSE: `193.8407 ps`
+- Test WNS MAE: `46.9111 ps`
+- Path slack RMSE: `38.6613 ps`
+
+### Key Findings
+- Cross-design error was heavily impacted by global-feature leakage when graph-size/geometry globals were used.
+- Restricting global inputs to sweep knobs significantly improved transfer stability.
+- Edge-conditioned messaging improved tripartite node RMSE and path metrics vs earlier tripartite variants.
+- The multitask baseline still has the best absolute node-slack RMSE on the current holdout.
+
+### Open Problems
+- Tripartite architecture is stronger on some critical/path metrics but still behind multitask baseline on node-slack RMSE.
+- Robust cross-design generalization remains the core challenge as designs scale beyond `gcd`/`aes`.
+- Need broader coverage (more designs/corners/conditions) before claiming strong physical generalization.
+
+### Recommended Next Steps
+- Add explicit edge-delay auxiliary prediction head for net edges and couple with node-loss.
+- Add clock/data two-stream modeling (separate latent propagation for clock and data timing).
+- Expand holdout protocols:
+- unseen-design at same node/library.
+- unseen-constraint regimes (clock scaling/density/routing stress).
+- Add more open-source designs to reduce overfitting to small-design idiosyncrasies.
+- Continue ranking/critical-path focused objectives while monitoring node RMSE tradeoffs.
+
+### Resume Commands (Fast)
+- Re-run best multitask sweep config:
+```bash
+python3 scripts/sweep_multitask.py --config configs/ml_sweep_mt_holdout_v1.json --jobs 2 --resume
+```
+- Train tripartite edge-conditioned model:
+```bash
+python3 scripts/train_tripath_dualpass.py \
+  --eval-mode holdout_design \
+  --train-design gcd \
+  --eval-design aes \
+  --hidden-dim 128 \
+  --message-steps 3 \
+  --batch-graphs 1 \
+  --loss-nodes-per-graph-train 1024 \
+  --loss-nodes-per-graph-eval 1024 \
+  --path-aux-weight 0.0
+```
+- Evaluate tripartite checkpoint:
+```bash
+python3 scripts/eval_tripath_dualpass.py --checkpoint results/train_runs/<run_name>/best.pt
+```
+
+### Moving to Another Machine
+- This repo does **not** vendor `OpenROAD-flow-scripts/` by design.
+- If you only run ML training/eval on existing processed data, OpenROAD is not required.
+- If you need to generate new PnR/timing data, install OpenROAD/ORFS separately and keep it outside git.
+- ML environment bootstrap:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install --upgrade pip
+python3 -m pip install -r requirements-ml.txt
+```
+
 ## Scope
 - Run ORFS sweeps on `nangate45` for `gcd` and `aes`.
 - Extract pin-level graph data and setup-max labels.
