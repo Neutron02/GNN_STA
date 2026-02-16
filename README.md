@@ -100,6 +100,179 @@ python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements-ml.txt
 ```
 
+## Detailed Continuation Spec (For Another LLM)
+This section is intentionally explicit so another model can resume without rediscovering project state.
+
+### Canonical Files To Read First
+- `README.md` (this file): project context and workflow.
+- `configs/sweep_phase1.json`: exact 32-run sweep definition.
+- `data/manifests/runs.csv`: run-level knob/status manifest.
+- `data/manifests/dataset_index.csv`: per-run artifact paths and counts.
+- `data/manifests/splits.json`: run-level train/val/test split for non-holdout workflows.
+- `scripts/train_gnn_multitask.py`: strongest node-level baseline family.
+- `scripts/train_tripath_dualpass.py`: strongest architecture-level variant for path/critical behavior.
+
+### What Data Exists Today
+- Phase-1 sweep complete: `32/32` runs succeeded.
+- Manifests:
+- `data/manifests/runs.csv` rows: `32` planned/successful runs.
+- `data/manifests/dataset_index.csv` rows: `32` extracted runs.
+- Design balance: `16 aes`, `16 gcd`.
+- Split file (`data/manifests/splits.json`):
+- `train`: `22` runs (`11 aes`, `11 gcd`).
+- `val`: `4` runs (`2 aes`, `2 gcd`).
+- `test`: `6` runs (`3 aes`, `3 gcd`).
+
+### Sweep Matrix Actually Built
+All runs target `nangate45`.
+
+| design | baseline matrix | routing subset (`rla=0.35`) | total |
+|---|---:|---:|---:|
+| `gcd` | 12 | 4 | 16 |
+| `aes` | 12 | 4 | 16 |
+| total | 24 | 8 | 32 |
+
+Clock periods used:
+- `gcd`: `0.414ns`, `0.460ns`, `0.506ns`
+- `aes`: `0.738ns`, `0.820ns`, `0.902ns`
+
+Baseline knobs:
+- `abc_area`: `{0,1}`
+- `place_density`: `{0.50,0.56}`
+- `routing_layer_adjustment`: unset (baseline) or `0.35` (subset only)
+
+### Artifact Contract Per Successful Run
+Raw curated (`data/raw_curated/<run_id>/`):
+- `6_final.odb`, `6_final.def`, `6_final.v`, `6_final.sdc`, `6_final.spef`
+- `6_net_rc.csv`, `6_finish.rpt`, `run_meta.json`
+
+Processed (`data/processed/<run_id>/`):
+- `nodes.csv`, `edges.csv`, `labels_setup_max.csv`, `global_features.json`
+- `paths_setup_max.json`, `paths_summary.csv`, `validation.json`
+
+Manifests:
+- `data/manifests/runs.csv`
+- `data/manifests/dataset_index.csv`
+- `data/manifests/splits.json`
+
+### Data Size Regime (Important For Model Decisions)
+From `data/manifests/dataset_index.csv`:
+- `aes` runs:
+- nodes: min `53509`, max `62084`, median `55872`
+- edges: min `75087`, max `83666`, median `77450`
+- paths reported: always `200`
+- `gcd` runs:
+- nodes: min `1597`, max `1954`, median `1614`
+- edges: min `1969`, max `2339`, median `1986`
+- paths reported: always `53`
+
+This is a strong cross-scale regime shift (`gcd` very small vs `aes` much larger).
+
+### Which Data Was Used In Key ML Results
+Primary reported transfer setting:
+- eval mode: `holdout_design`
+- train design: `gcd`
+- eval design: `aes`
+- typical selected sets in holdout runs:
+- train: `11` `gcd` runs
+- val: `2` `gcd` runs
+- test: all `16` `aes` runs
+
+Targets:
+- `arrival_setup_scalar_s`
+- `slack_setup_scalar_s` (primary metric target)
+- `required_setup_scalar_s`
+
+Normalization convention:
+- targets scaled by `1e12` (seconds -> picoseconds) before z-score normalization.
+
+### Best Known Metrics Snapshot
+Best node-slack RMSE baseline (multitask sweep):
+- source: `results/sweeps/mt_holdout_v1/leaderboard.csv`
+- run: `mt_holdout_v1__tw070_c5e4_r002`
+- test slack RMSE: `141.4446 ps`
+- test WNS MAE: `90.1341 ps`
+
+Best tripartite edge-conditioned checkpoint:
+- source: `results/train_runs/holdout_tripath_dualpass_edgecond_fastv1/eval_best.json`
+- test slack RMSE: `193.8407 ps`
+- test slack MAE: `137.5726 ps`
+- test WNS MAE: `46.9111 ps`
+- test path slack RMSE: `38.6613 ps`
+
+Other relevant comparison points:
+- `holdout_hetero_dualpass_v1`: slack RMSE `181.7624 ps`, WNS MAE `199.0490 ps`
+- `holdout_tripath_dualpass_fastv2_ms3`: slack RMSE `203.8639 ps`, WNS MAE `36.7085 ps`
+- `holdout_tripath_dualpass_edgecond_fastv1_crit2`: slack RMSE `214.6588 ps` (worse than default edge-conditioned)
+
+### Known Pitfalls And Resolved Issues
+- Path endpoint matching bug:
+- issue: path names did not always match node pin names directly due to escaping/hierarchy format.
+- fix: alias-based normalization/matching in `scripts/train_tripath_dualpass.py`.
+- Global feature leakage:
+- issue: graph-size/geometry global features acted like design identifiers and hurt holdout transfer.
+- fix: global conditioning restricted to sweep knobs only.
+- Large run instability on limited hardware:
+- mitigation: use `batch_graphs=1`, node subsampling (`loss_nodes_per_graph_*`), moderate `hidden_dim`.
+
+### What Is Not Tracked In Git (Important)
+- `OpenROAD-flow-scripts/` is ignored by design.
+- `results/train_runs/` and `results/sweeps/` are ignored.
+- Therefore, metrics listed above may not exist on a fresh clone unless regenerated.
+- Ground-truth dataset artifacts under `data/raw_curated/` and `data/processed/` are tracked.
+
+### Exact Resume Procedure On New Machine
+If only ML work is needed (no new ORFS runs):
+```bash
+git clone https://github.com/Neutron02/GNN_STA.git
+cd GNN_STA
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install --upgrade pip
+python3 -m pip install -r requirements-ml.txt
+```
+
+Re-run strongest baseline quickly:
+```bash
+python3 scripts/sweep_multitask.py --config configs/ml_sweep_mt_holdout_v1.json --jobs 2 --resume
+```
+
+Re-run current best tripartite variant:
+```bash
+python3 scripts/train_tripath_dualpass.py \
+  --eval-mode holdout_design \
+  --train-design gcd \
+  --eval-design aes \
+  --hidden-dim 128 \
+  --message-steps 3 \
+  --batch-graphs 1 \
+  --loss-nodes-per-graph-train 1024 \
+  --loss-nodes-per-graph-eval 1024 \
+  --path-aux-weight 0.0
+```
+
+If new data generation is needed:
+- Install OpenROAD/ORFS separately.
+- Ensure binary path exists: `OpenROAD-flow-scripts/tools/install/OpenROAD/bin/openroad`
+- Run:
+```bash
+python3 scripts/gen_sdc_variants.py --config configs/sweep_phase1.json
+python3 scripts/run_sweep.py --config configs/sweep_phase1.json --jobs 2 --resume
+```
+
+### Phase-2 Data Build Recommendations
+- Add more designs beyond `gcd`/`aes` (e.g., `ibex` and other ORFS open designs).
+- Add corners/parasitic variation (if available in libraries and flow setup).
+- Add additional sweep axes only after preserving baseline reproducibility:
+- clock scaling expansion
+- placement/routing stress expansion
+- optional extraction-condition variation
+
+### Success Criteria For Next Iteration
+- Beat `141.4446 ps` holdout node-slack RMSE while preserving/improving path and WNS metrics.
+- Maintain stable training under constrained hardware (`batch_graphs=1` fallback path).
+- Keep all new experiments reproducible via committed scripts/configs and explicit commands in README.
+
 ## Scope
 - Run ORFS sweeps on `nangate45` for `gcd` and `aes`.
 - Extract pin-level graph data and setup-max labels.
