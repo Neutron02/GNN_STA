@@ -246,6 +246,31 @@ python3 scripts/sweep_multitask.py \
   --resume
 ```
 
+Architecture-level variant (hetero dual-pass with lifted net nodes):
+```bash
+python3 scripts/train_hetero_dualpass.py \
+  --eval-mode holdout_design \
+  --train-design gcd \
+  --eval-design aes \
+  --target-cols arrival_setup_scalar_s,slack_setup_scalar_s,required_setup_scalar_s \
+  --primary-target-col slack_setup_scalar_s \
+  --target-weights 0.7,1.0,0.7 \
+  --hidden-dim 192 \
+  --message-steps 5 \
+  --cell-emb-dim 24 \
+  --consistency-weight 5e-4 \
+  --rank-loss-weight 0.03 \
+  --epochs 40
+```
+
+Evaluate hetero dual-pass checkpoint:
+```bash
+python3 scripts/eval_hetero_dualpass.py \
+  --checkpoint results/train_runs/<run_name>/best.pt \
+  --dataset-index data/manifests/dataset_index.csv \
+  --splits data/manifests/splits.json
+```
+
 ## Dataset Schemas
 ### `nodes.csv`
 - `node_id`, `node_name`, `node_kind`
