@@ -271,6 +271,32 @@ python3 scripts/eval_hetero_dualpass.py \
   --splits data/manifests/splits.json
 ```
 
+Architecture-level variant (tripartite dual-pass + path supervision):
+```bash
+python3 scripts/train_tripath_dualpass.py \
+  --eval-mode holdout_design \
+  --train-design gcd \
+  --eval-design aes \
+  --target-cols arrival_setup_scalar_s,slack_setup_scalar_s,required_setup_scalar_s \
+  --primary-target-col slack_setup_scalar_s \
+  --target-weights 0.7,1.0,0.7 \
+  --hidden-dim 128 \
+  --message-steps 3 \
+  --cell-emb-dim 24 \
+  --consistency-weight 5e-4 \
+  --rank-loss-weight 0.03 \
+  --path-aux-weight 0.0 \
+  --epochs 24
+```
+
+Evaluate tripartite dual-pass checkpoint:
+```bash
+python3 scripts/eval_tripath_dualpass.py \
+  --checkpoint results/train_runs/<run_name>/best.pt \
+  --dataset-index data/manifests/dataset_index.csv \
+  --splits data/manifests/splits.json
+```
+
 ## Dataset Schemas
 ### `nodes.csv`
 - `node_id`, `node_name`, `node_kind`
