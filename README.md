@@ -288,6 +288,7 @@ python3 scripts/train_tripath_dualpass.py \
   --path-aux-weight 0.0 \
   --epochs 24
 ```
+This variant uses edge-conditioned message passing on timing relations, injecting per-edge RC/fanout/length features into propagation.
 
 Evaluate tripartite dual-pass checkpoint:
 ```bash

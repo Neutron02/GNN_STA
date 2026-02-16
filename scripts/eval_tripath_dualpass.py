@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Dict, List
 
-from ml_training_common import load_dataset_index, load_splits, require_torch, select_rows
+from ml_training_common import EDGE_NUMERIC_COLS, load_dataset_index, load_splits, require_torch, select_rows
 from train_tripath_dualpass import (
     TripNormStats,
     TripathDualPassNet,
@@ -134,6 +134,7 @@ def main() -> None:
         out_dim=int(model_cfg["out_dim"]),
         cell_type_vocab_size=int(model_cfg.get("cell_type_vocab_size", len(cell_vocab))),
         cell_emb_dim=int(model_cfg.get("cell_emb_dim", 0)),
+        edge_attr_dim=int(model_cfg.get("edge_attr_dim", len(EDGE_NUMERIC_COLS) + 2)),
     ).to(device)
     model.load_state_dict(ckpt["model_state"])
 

@@ -4,8 +4,9 @@
 Architecture highlights:
 - Tripartite graph: pin + cell + net nodes.
 - Relation-specific message passing over directed typed edges.
+- Edge-conditioned relation messages using per-edge RC/fanout/length features.
 - Dual-pass latent states (forward/backward timing semantics).
-- Global-context conditioning (clock, density, placement/size features).
+- Global-context conditioning (sweep knobs only, to improve transfer).
 - Path auxiliary head trained from path endpoints in paths_summary.csv.
 """
 
@@ -55,6 +56,10 @@ GLOBAL_FEATURE_KEYS = (
     "routing_layer_adjustment",
 )
 
+# Edge-conditioning features used by relation message functions.
+# [EDGE_NUMERIC_COLS..., is_signal_net, is_clock_net]
+EDGE_REL_ATTR_DIM = len(EDGE_NUMERIC_COLS) + 2
+
 
 @dataclass
 class TripGraph:
@@ -67,6 +72,7 @@ class TripGraph:
     cell_type_tokens: List[str]
     cell_type_idx: Optional["torch.Tensor"]
     edge_rel_local: Dict[str, "torch.Tensor"]
+    edge_attr_rel_local: Dict[str, "torch.Tensor"]
     y_sec: "torch.Tensor"  # [P, T]
     y_norm: "torch.Tensor"  # [P, T]
     finite_idx: "torch.Tensor"
@@ -142,6 +148,7 @@ class TripBatch:
     global_x: "torch.Tensor"  # [B, G]
     cell_type_idx: Optional["torch.Tensor"]
     edge_rel_global: Dict[str, "torch.Tensor"]
+    edge_attr_rel_global: Dict[str, "torch.Tensor"]  # [E_rel, F_edge]
     node_graph_idx: "torch.Tensor"  # [total_nodes]
     y_sec: "torch.Tensor"  # [P, T]
     y_norm: "torch.Tensor"  # [P, T]
@@ -344,6 +351,14 @@ def _build_global_features(
     return vals
 
 
+def _edge_attr_from_net_row(erow: Dict[str, str]) -> List[float]:
+    vals = [_to_float(erow.get(col, "0")) for col in EDGE_NUMERIC_COLS]
+    sig = str(erow.get("net_sig_type", "")).strip().upper()
+    vals.append(1.0 if sig == "SIGNAL" else 0.0)
+    vals.append(1.0 if sig == "CLOCK" else 0.0)
+    return vals
+
+
 def load_trip_graph(row: Dict[str, str], target_cols: Sequence[str], max_paths: int) -> TripGraph:
     run_id = row["run_id"]
     design = row["design"]
@@ -466,6 +481,8 @@ def load_trip_graph(row: Dict[str, str], target_cols: Sequence[str], max_paths: 
     # pins [0, P), cells [P, P+C), nets [P+C, P+C+N)
     rel_src: Dict[str, List[int]] = {r: [] for r in RELATIONS}
     rel_dst: Dict[str, List[int]] = {r: [] for r in RELATIONS}
+    rel_attr: Dict[str, List[List[float]]] = {r: [] for r in RELATIONS}
+    zero_edge_attr = [0.0] * EDGE_REL_ATTR_DIM
 
     # pin <-> cell relations
     num_cells = len(cell_feats)
@@ -475,8 +492,10 @@ def load_trip_graph(row: Dict[str, str], target_cols: Sequence[str], max_paths: 
         c_local = num_pins + cidx
         rel_src["pin_to_cell"].append(pidx)
         rel_dst["pin_to_cell"].append(c_local)
+        rel_attr["pin_to_cell"].append(list(zero_edge_attr))
         rel_src["cell_to_pin"].append(c_local)
         rel_dst["cell_to_pin"].append(pidx)
+        rel_attr["cell_to_pin"].append(list(zero_edge_attr))
 
     # net lifting and routed RC accumulation.
     net_name_to_idx: Dict[str, int] = {}
@@ -493,6 +512,7 @@ def load_trip_graph(row: Dict[str, str], target_cols: Sequence[str], max_paths: 
         if edge_type == "cell_arc":
             rel_src["cell_arc"].append(src)
             rel_dst["cell_arc"].append(dst)
+            rel_attr["cell_arc"].append(list(zero_edge_attr))
             continue
 
         if edge_type != "net":
@@ -500,6 +520,7 @@ def load_trip_graph(row: Dict[str, str], target_cols: Sequence[str], max_paths: 
 
         net_name = str(erow.get("net_name", "")).strip()
         numf = [_to_float(erow.get(col, "0")) for col in EDGE_NUMERIC_COLS]
+        net_attr = _edge_attr_from_net_row(erow)
 
         if net_name:
             nidx = net_name_to_idx.get(net_name)
@@ -515,11 +536,14 @@ def load_trip_graph(row: Dict[str, str], target_cols: Sequence[str], max_paths: 
             n_local = num_pins + num_cells + nidx
             rel_src["drv_to_net"].append(src)
             rel_dst["drv_to_net"].append(n_local)
+            rel_attr["drv_to_net"].append(net_attr)
             rel_src["net_to_sink"].append(n_local)
             rel_dst["net_to_sink"].append(dst)
+            rel_attr["net_to_sink"].append(net_attr)
         else:
             rel_src["net_pair"].append(src)
             rel_dst["net_pair"].append(dst)
+            rel_attr["net_pair"].append(net_attr)
 
     net_feats: List[List[float]] = []
     for nidx in range(len(net_acc_sum)):
@@ -528,11 +552,19 @@ def load_trip_graph(row: Dict[str, str], target_cols: Sequence[str], max_paths: 
     num_nets = len(net_feats)
 
     edge_rel_local: Dict[str, torch.Tensor] = {}
+    edge_attr_rel_local: Dict[str, torch.Tensor] = {}
     for rel in RELATIONS:
         if rel_src[rel]:
+            if len(rel_attr[rel]) != len(rel_src[rel]):
+                raise RuntimeError(
+                    f"{run_id}: relation '{rel}' attr count mismatch "
+                    f"{len(rel_attr[rel])} vs {len(rel_src[rel])}"
+                )
             edge_rel_local[rel] = torch.tensor([rel_src[rel], rel_dst[rel]], dtype=torch.long)
+            edge_attr_rel_local[rel] = torch.tensor(rel_attr[rel], dtype=torch.float32)
         else:
             edge_rel_local[rel] = torch.zeros((2, 0), dtype=torch.long)
+            edge_attr_rel_local[rel] = torch.zeros((0, EDGE_REL_ATTR_DIM), dtype=torch.float32)
 
     # Path supervision: endpoint pair + (arrival, slack).
     path_pairs: List[List[int]] = []
@@ -592,6 +624,7 @@ def load_trip_graph(row: Dict[str, str], target_cols: Sequence[str], max_paths: 
         cell_type_tokens=cell_type_tokens,
         cell_type_idx=None,
         edge_rel_local=edge_rel_local,
+        edge_attr_rel_local=edge_attr_rel_local,
         y_sec=torch.tensor(y_sec, dtype=torch.float32),
         y_norm=torch.zeros((num_pins, len(target_cols)), dtype=torch.float32),
         finite_idx=torch.tensor(finite_idx, dtype=torch.long),
@@ -752,6 +785,7 @@ def make_batch(graphs: Sequence[TripGraph], loss_nodes_per_graph: int, rng: rand
 
     rel_src_parts: Dict[str, List[torch.Tensor]] = {r: [] for r in RELATIONS}
     rel_dst_parts: Dict[str, List[torch.Tensor]] = {r: [] for r in RELATIONS}
+    rel_attr_parts: Dict[str, List[torch.Tensor]] = {r: [] for r in RELATIONS}
     loss_parts: List[torch.Tensor] = []
 
     path_pair_parts: List[torch.Tensor] = []
@@ -784,6 +818,12 @@ def make_batch(graphs: Sequence[TripGraph], loss_nodes_per_graph: int, rng: rand
             e = g.edge_rel_local[rel]
             if int(e.size(1)) == 0:
                 continue
+            ea = g.edge_attr_rel_local[rel]
+            if int(ea.size(0)) != int(e.size(1)):
+                raise RuntimeError(
+                    f"{g.run_id}: relation '{rel}' edge_attr rows {int(ea.size(0))} "
+                    f"!= edges {int(e.size(1))}"
+                )
             src = e[0].clone()
             dst = e[1].clone()
 
@@ -802,6 +842,7 @@ def make_batch(graphs: Sequence[TripGraph], loss_nodes_per_graph: int, rng: rand
             dst_g = _map(dst)
             rel_src_parts[rel].append(src_g)
             rel_dst_parts[rel].append(dst_g)
+            rel_attr_parts[rel].append(ea)
 
         if int(g.path_pairs_pin.size(0)) > 0:
             path_pair_parts.append(g.path_pairs_pin + pin_off)
@@ -825,14 +866,17 @@ def make_batch(graphs: Sequence[TripGraph], loss_nodes_per_graph: int, rng: rand
             node_graph_idx_parts.append(torch.full((g.num_nets,), gidx, dtype=torch.long))
 
     edge_rel_global: Dict[str, torch.Tensor] = {}
+    edge_attr_rel_global: Dict[str, torch.Tensor] = {}
     for rel in RELATIONS:
         if rel_src_parts[rel]:
             edge_rel_global[rel] = torch.stack(
                 [torch.cat(rel_src_parts[rel], dim=0), torch.cat(rel_dst_parts[rel], dim=0)],
                 dim=0,
             )
+            edge_attr_rel_global[rel] = torch.cat(rel_attr_parts[rel], dim=0)
         else:
             edge_rel_global[rel] = torch.zeros((2, 0), dtype=torch.long)
+            edge_attr_rel_global[rel] = torch.zeros((0, EDGE_REL_ATTR_DIM), dtype=torch.float32)
 
     if path_pair_parts:
         path_pairs_global = torch.cat(path_pair_parts, dim=0)
@@ -850,6 +894,7 @@ def make_batch(graphs: Sequence[TripGraph], loss_nodes_per_graph: int, rng: rand
         global_x=global_x,
         cell_type_idx=cell_type_idx,
         edge_rel_global=edge_rel_global,
+        edge_attr_rel_global=edge_attr_rel_global,
         node_graph_idx=torch.cat(node_graph_idx_parts, dim=0),
         y_sec=y_sec,
         y_norm=y_norm,
@@ -899,6 +944,7 @@ class TripathDualPassNet(nn.Module):
         out_dim: int = 3,
         cell_type_vocab_size: int = 0,
         cell_emb_dim: int = 0,
+        edge_attr_dim: int = EDGE_REL_ATTR_DIM,
     ) -> None:
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -906,6 +952,7 @@ class TripathDualPassNet(nn.Module):
         self.out_dim = out_dim
         self.cell_emb_dim = max(0, int(cell_emb_dim))
         self.cell_type_vocab_size = max(0, int(cell_type_vocab_size))
+        self.edge_attr_dim = max(1, int(edge_attr_dim))
 
         self.cell_embedding = None
         if self.cell_emb_dim > 0 and self.cell_type_vocab_size > 0:
@@ -942,14 +989,25 @@ class TripathDualPassNet(nn.Module):
 
         self.msg_f = nn.ModuleDict()
         self.msg_b = nn.ModuleDict()
+        self.edge_embed = nn.ModuleDict()
+        self.edge_gate = nn.ModuleDict()
         for rel in RELATIONS:
+            self.edge_embed[rel] = nn.Sequential(
+                nn.Linear(self.edge_attr_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim),
+            )
+            self.edge_gate[rel] = nn.Sequential(
+                nn.Linear(self.edge_attr_dim, hidden_dim),
+                nn.Sigmoid(),
+            )
             self.msg_f[rel] = nn.Sequential(
-                nn.Linear(hidden_dim * 2, hidden_dim),
+                nn.Linear(hidden_dim * 3, hidden_dim),
                 nn.ReLU(),
                 nn.Linear(hidden_dim, hidden_dim),
             )
             self.msg_b[rel] = nn.Sequential(
-                nn.Linear(hidden_dim * 2, hidden_dim),
+                nn.Linear(hidden_dim * 3, hidden_dim),
                 nn.ReLU(),
                 nn.Linear(hidden_dim, hidden_dim),
             )
@@ -997,6 +1055,7 @@ class TripathDualPassNet(nn.Module):
         net_x: "torch.Tensor",
         global_x: "torch.Tensor",
         edge_rel: Dict[str, "torch.Tensor"],
+        edge_attr_rel: Dict[str, "torch.Tensor"],
         node_graph_idx: "torch.Tensor",
         cell_type_idx: Optional["torch.Tensor"] = None,
         path_pairs_global: Optional["torch.Tensor"] = None,
@@ -1034,18 +1093,26 @@ class TripathDualPassNet(nn.Module):
                 e = edge_rel[rel]
                 if int(e.size(1)) == 0:
                     continue
+                ea = edge_attr_rel[rel]
+                if int(ea.size(0)) != int(e.size(1)):
+                    raise RuntimeError(
+                        f"edge_attr_rel['{rel}'] rows {int(ea.size(0))} "
+                        f"!= edge count {int(e.size(1))}"
+                    )
                 src = e[0]
                 dst = e[1]
+                e_h = self.edge_embed[rel](ea)
+                e_g = self.edge_gate[rel](ea)
 
-                msg_in_f = torch.cat([h_f[src], h_b[src]], dim=1)
-                msg_f = self.msg_f[rel](msg_in_f)
+                msg_in_f = torch.cat([h_f[src], h_b[src], e_h], dim=1)
+                msg_f = self.msg_f[rel](msg_in_f) * (0.5 + e_g)
                 agg_f.index_add_(0, dst, msg_f)
                 deg_f.index_add_(0, dst, torch.ones((dst.size(0),), dtype=h_f.dtype, device=h_f.device))
 
                 src_b = dst
                 dst_b = src
-                msg_in_b = torch.cat([h_b[src_b], h_f[src_b]], dim=1)
-                msg_b = self.msg_b[rel](msg_in_b)
+                msg_in_b = torch.cat([h_b[src_b], h_f[src_b], e_h], dim=1)
+                msg_b = self.msg_b[rel](msg_in_b) * (0.5 + e_g)
                 agg_b.index_add_(0, dst_b, msg_b)
                 deg_b.index_add_(0, dst_b, torch.ones((dst_b.size(0),), dtype=h_b.dtype, device=h_b.device))
 
@@ -1144,6 +1211,7 @@ def evaluate_model(
             net_x = batch.net_x.to(device)
             global_x = batch.global_x.to(device)
             rel = {k: v.to(device) for k, v in batch.edge_rel_global.items()}
+            rel_attr = {k: v.to(device) for k, v in batch.edge_attr_rel_global.items()}
             node_graph_idx = batch.node_graph_idx.to(device)
             cidx = batch.cell_type_idx.to(device) if batch.cell_type_idx is not None else None
             y_norm = batch.y_norm.to(device)
@@ -1159,6 +1227,7 @@ def evaluate_model(
                 net_x=net_x,
                 global_x=global_x,
                 edge_rel=rel,
+                edge_attr_rel=rel_attr,
                 node_graph_idx=node_graph_idx,
                 cell_type_idx=cidx,
                 path_pairs_global=path_pairs,
@@ -1368,6 +1437,7 @@ def main() -> None:
         out_dim=len(target_cols),
         cell_type_vocab_size=len(cell_vocab),
         cell_emb_dim=(args.cell_emb_dim if args.cell_emb_dim > 0 else 0),
+        edge_attr_dim=int(train_graphs[0].edge_attr_rel_local[RELATIONS[0]].size(1)),
     ).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -1401,6 +1471,7 @@ def main() -> None:
             "out_dim": len(target_cols),
             "cell_emb_dim": (args.cell_emb_dim if args.cell_emb_dim > 0 else 0),
             "cell_type_vocab_size": len(cell_vocab),
+            "edge_attr_dim": int(train_graphs[0].edge_attr_rel_local[RELATIONS[0]].size(1)),
         },
         "cell_type_vocab": cell_vocab,
         "normalization": stats.to_dict(),
@@ -1430,6 +1501,7 @@ def main() -> None:
             net_x = batch.net_x.to(device)
             global_x = batch.global_x.to(device)
             rel = {k: v.to(device) for k, v in batch.edge_rel_global.items()}
+            rel_attr = {k: v.to(device) for k, v in batch.edge_attr_rel_global.items()}
             node_graph_idx = batch.node_graph_idx.to(device)
             cidx = batch.cell_type_idx.to(device) if batch.cell_type_idx is not None else None
             y_norm = batch.y_norm.to(device)
@@ -1445,6 +1517,7 @@ def main() -> None:
                 net_x=net_x,
                 global_x=global_x,
                 edge_rel=rel,
+                edge_attr_rel=rel_attr,
                 node_graph_idx=node_graph_idx,
                 cell_type_idx=cidx,
                 path_pairs_global=path_pairs,
