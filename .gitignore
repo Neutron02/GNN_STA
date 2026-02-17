@@ -1,5 +1,6 @@
 # Keep ORFS checkout/tools out of this project repo
 OpenROAD-flow-scripts/
+OpenROAD-flow-scripts/tools/OpenROAD/
 
 # Python
 __pycache__/
