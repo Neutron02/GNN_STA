@@ -1,0 +1,40 @@
+{
+  "platform": "nangate45",
+  "openroad_bin": "OpenROAD-flow-scripts/tools/install/OpenROAD/bin/openroad",
+  "orfs_flow_dir": "OpenROAD-flow-scripts/flow",
+  "liberty": "OpenROAD-flow-scripts/flow/platforms/nangate45/lib/NangateOpenCellLibrary_typical.lib",
+  "template_sdc": {
+    "jpeg": "OpenROAD-flow-scripts/flow/designs/nangate45/jpeg/constraint.sdc",
+    "swerv": "OpenROAD-flow-scripts/flow/designs/nangate45/swerv/constraint.sdc",
+    "bp_fe_top": "OpenROAD-flow-scripts/flow/designs/nangate45/bp_fe_top/constraint.sdc"
+  },
+  "generated_sdc_dir": "configs/sdc_generated",
+  "default_make_jobs": 2,
+  "default_num_cores": 2,
+  "run_grid": {
+    "clock_scales": [
+      1.0
+    ],
+    "abc_area": [
+      0
+    ],
+    "place_density": [
+      0.5
+    ],
+    "routing_layer_adjustment": [
+      null
+    ],
+    "designs": {
+      "jpeg": {
+        "base_clock_period_ns": 1.0
+      },
+      "swerv": {
+        "base_clock_period_ns": 2.0
+      },
+      "bp_fe_top": {
+        "base_clock_period_ns": 1.8,
+        "flow_design": "bp_fe"
+      }
+    }
+  }
+}

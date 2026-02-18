@@ -36,6 +36,11 @@ def finite_min(values: Iterable[float]) -> float:
     return min(vals) if vals else float("nan")
 
 
+def finite_sum(values: Iterable[float]) -> float:
+    vals = [v for v in values if is_finite(v)]
+    return sum(vals) if vals else float("nan")
+
+
 def time_or_nan(fn, timing: Timing) -> float:
     try:
         val = float(fn())
@@ -495,6 +500,14 @@ def main() -> None:
     run_meta = load_run_meta(raw_dir)
     finish_metrics = parse_finish_report_metrics(raw_dir / "6_finish.rpt")
 
+    slack_vals_s = [safe_float(r.get("slack_setup_scalar_s")) for r in labels]
+    arrival_vals_s = [safe_float(r.get("arrival_setup_scalar_s")) for r in labels]
+    req_vals_s = [safe_float(r.get("required_setup_scalar_s")) for r in labels]
+    label_wns_ns = finite_min(slack_vals_s) * 1e9
+    label_tns_ns = finite_sum(v for v in slack_vals_s if is_finite(v) and v < 0.0) * 1e9
+    label_cpd_ns = finite_max(arrival_vals_s) * 1e9
+    label_cps_ns = finite_min(req_vals_s[i] - arrival_vals_s[i] for i in range(min(len(req_vals_s), len(arrival_vals_s)))) * 1e9
+
     rcx_joined_edges = sum(
         1
         for edge in edges
@@ -509,12 +522,30 @@ def main() -> None:
         "abc_area": run_meta.get("abc_area"),
         "place_density": run_meta.get("place_density"),
         "routing_layer_adjustment": run_meta.get("routing_layer_adjustment"),
+        "scenario_id": run_meta.get("scenario_id", "base"),
+        "scenario_mode": run_meta.get("scenario_mode", "func"),
+        "scenario_pvt": run_meta.get("scenario_pvt", "typical"),
+        "scenario_rc": run_meta.get("scenario_rc", "typ"),
+        "clock_uncertainty_ns": run_meta.get("clock_uncertainty_ns"),
+        "timing_derate_late": run_meta.get("timing_derate_late"),
+        "timing_derate_early": run_meta.get("timing_derate_early"),
+        "input_delay_scale": run_meta.get("input_delay_scale"),
+        "output_delay_scale": run_meta.get("output_delay_scale"),
+        "source_run_id": run_meta.get("source_run_id", args.run_id),
         "num_nodes": len(nodes),
         "num_edges": len(edges),
         "num_net_edges": sum(1 for e in edges if e["edge_type"] == "net"),
         "num_cell_arc_edges": sum(1 for e in edges if e["edge_type"] == "cell_arc"),
         "num_rcx_joined_net_edges": rcx_joined_edges,
-        **finish_metrics,
+        "tns_ns": label_tns_ns if is_finite(label_tns_ns) else finish_metrics.get("tns_ns"),
+        "wns_ns": label_wns_ns if is_finite(label_wns_ns) else finish_metrics.get("wns_ns"),
+        "worst_slack_ns": label_wns_ns if is_finite(label_wns_ns) else finish_metrics.get("worst_slack_ns"),
+        "critical_path_delay_ns": label_cpd_ns
+        if is_finite(label_cpd_ns)
+        else finish_metrics.get("critical_path_delay_ns"),
+        "critical_path_slack_ns": label_cps_ns
+        if is_finite(label_cps_ns)
+        else finish_metrics.get("critical_path_slack_ns"),
     }
 
     dump_json(out_dir / "global_features.json", global_features)

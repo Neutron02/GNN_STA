@@ -147,8 +147,8 @@ def load_splits(path: Path) -> Dict[str, List[str]]:
     }
 
 
-def _row_ok(row: Dict[str, str], design: str) -> bool:
-    if row.get("design") != design:
+def _row_ok(row: Dict[str, str], design: Optional[str]) -> bool:
+    if design is not None and row.get("design") != design:
         return False
     if row.get("status") != "success":
         return False
@@ -166,7 +166,7 @@ def _limit_rows(rows: List[Dict[str, str]], max_runs: int) -> List[Dict[str, str
 def _pick_rows_from_ids(
     dataset_index: Dict[str, Dict[str, str]],
     run_ids: Sequence[str],
-    design: str,
+    design: Optional[str],
 ) -> List[Dict[str, str]]:
     out: List[Dict[str, str]] = []
     for rid in run_ids:
@@ -178,7 +178,7 @@ def _pick_rows_from_ids(
     return out
 
 
-def _pick_rows_all(dataset_index: Dict[str, Dict[str, str]], design: str) -> List[Dict[str, str]]:
+def _pick_rows_all(dataset_index: Dict[str, Dict[str, str]], design: Optional[str]) -> List[Dict[str, str]]:
     out: List[Dict[str, str]] = []
     for rid in sorted(dataset_index.keys()):
         row = dataset_index[rid]
@@ -199,10 +199,12 @@ def select_rows(
     max_test_runs: int,
 ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]], List[Dict[str, str]], str]:
     if eval_mode == "within_design":
-        train_rows = _limit_rows(_pick_rows_from_ids(dataset_index, splits["train"], design), max_train_runs)
-        val_rows = _limit_rows(_pick_rows_from_ids(dataset_index, splits["val"], design), max_val_runs)
-        test_rows = _limit_rows(_pick_rows_from_ids(dataset_index, splits["test"], design), max_test_runs)
-        return train_rows, val_rows, test_rows, f"within_design:{design}"
+        design_sel: Optional[str] = None if str(design).strip().lower() in {"all", "*", "mixed"} else design
+        train_rows = _limit_rows(_pick_rows_from_ids(dataset_index, splits["train"], design_sel), max_train_runs)
+        val_rows = _limit_rows(_pick_rows_from_ids(dataset_index, splits["val"], design_sel), max_val_runs)
+        test_rows = _limit_rows(_pick_rows_from_ids(dataset_index, splits["test"], design_sel), max_test_runs)
+        tag = "within_design:all" if design_sel is None else f"within_design:{design_sel}"
+        return train_rows, val_rows, test_rows, tag
 
     if eval_mode == "holdout_design":
         train_rows = _limit_rows(

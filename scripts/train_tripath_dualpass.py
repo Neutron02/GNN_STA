@@ -8,11 +8,13 @@ Architecture highlights:
 - Dual-pass latent states (forward/backward timing semantics).
 - Global-context conditioning (sweep knobs only, to improve transfer).
 - Path auxiliary head trained from path endpoints in paths_summary.csv.
+- Optional net-edge delay auxiliary head on `net_to_sink` relation edges.
 """
 
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
 import json
 import math
@@ -34,9 +36,13 @@ from ml_training_common import (
 try:
     import torch
     import torch.nn as nn
+    import torch.nn.functional as F
 except Exception:  # pragma: no cover
     torch = None
     nn = None
+    F = None
+
+_NNModuleBase = nn.Module if nn is not None else object
 
 
 RELATIONS = (
@@ -47,6 +53,8 @@ RELATIONS = (
     "net_to_sink",
     "net_pair",
 )
+
+ARRIVAL_TARGET_COL = "arrival_setup_scalar_s"
 
 # Keep only sweep/runtime knobs that should transfer across designs.
 GLOBAL_FEATURE_KEYS = (
@@ -80,6 +88,9 @@ class TripGraph:
     path_pairs_pin: "torch.Tensor"  # [M, 2] pin indices
     path_targets_sec: "torch.Tensor"  # [M, 2] (arrival, slack)
     path_targets_norm: "torch.Tensor"  # [M, 2]
+    net_delay_targets_sec_local: "torch.Tensor"  # [E_net_to_sink]
+    net_delay_targets_norm_local: "torch.Tensor"  # [E_net_to_sink]
+    net_delay_valid_mask_local: "torch.Tensor"  # [E_net_to_sink] float in {0,1}
 
     @property
     def num_pins(self) -> int:
@@ -107,6 +118,8 @@ class TripNormStats:
     target_scale: float
     target_mean: List[float]
     target_std: List[float]
+    net_delay_mean: float
+    net_delay_std: float
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -121,6 +134,8 @@ class TripNormStats:
             "target_scale": self.target_scale,
             "target_mean": self.target_mean,
             "target_std": self.target_std,
+            "net_delay_mean": self.net_delay_mean,
+            "net_delay_std": self.net_delay_std,
         }
 
     @classmethod
@@ -137,6 +152,8 @@ class TripNormStats:
             target_scale=float(d["target_scale"]),
             target_mean=[float(v) for v in d["target_mean"]],
             target_std=[float(v) for v in d["target_std"]],
+            net_delay_mean=float(d.get("net_delay_mean", 0.0)),
+            net_delay_std=max(1e-12, float(d.get("net_delay_std", 1.0))),
         )
 
 
@@ -156,6 +173,9 @@ class TripBatch:
     path_pairs_global: "torch.Tensor"  # [M, 2] pin indices
     path_targets_sec: "torch.Tensor"  # [M, 2]
     path_targets_norm: "torch.Tensor"  # [M, 2]
+    net_delay_targets_sec: "torch.Tensor"  # [E_net_to_sink]
+    net_delay_targets_norm: "torch.Tensor"  # [E_net_to_sink]
+    net_delay_valid_mask: "torch.Tensor"  # [E_net_to_sink] float in {0,1}
     graph_pin_ptr: List[int]
     graph_wns_sec: List[Optional[float]]
     graph_run_ids: List[str]
@@ -293,12 +313,34 @@ def _write_epoch_csv(path: Path, rows: List[Dict[str, object]]) -> None:
         "test_wns_mae_ps",
         "val_path_slack_rmse_ps",
         "test_path_slack_rmse_ps",
+        "val_edge_delay_rmse_ps",
+        "test_edge_delay_rmse_ps",
+        "val_critical_f1",
+        "test_critical_f1",
     ]
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
         for r in rows:
             w.writerow({k: r.get(k, "") for k in fieldnames})
+
+
+def _load_trip_graphs_parallel(
+    rows: Sequence[Dict[str, str]],
+    target_cols: Sequence[str],
+    max_paths: int,
+    workers: int,
+) -> List[TripGraph]:
+    if workers <= 1:
+        return [load_trip_graph(r, target_cols, max_paths=max_paths) for r in rows]
+    out: List[TripGraph] = [None] * len(rows)  # type: ignore[list-item]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        fut_to_idx = {
+            ex.submit(load_trip_graph, row, target_cols, max_paths=max_paths): i for i, row in enumerate(rows)
+        }
+        for fut in concurrent.futures.as_completed(fut_to_idx):
+            out[fut_to_idx[fut]] = fut.result()
+    return out
 
 
 def _pairwise_rank_loss(
@@ -327,6 +369,20 @@ def _pairwise_rank_loss(
     jj = jj[valid]
     d_pred = pred[jj] - pred[ii]
     return torch.relu(float(margin) - sign * d_pred).mean()
+
+
+def _elementwise_regression_loss(
+    diff: "torch.Tensor",
+    mode: str,
+    huber_delta_norm: float,
+) -> "torch.Tensor":
+    if mode == "huber":
+        delta = max(1e-12, float(huber_delta_norm))
+        abs_diff = diff.abs()
+        quad = 0.5 * abs_diff.pow(2) / delta
+        lin = abs_diff - 0.5 * delta
+        return torch.where(abs_diff <= delta, quad, lin)
+    return diff.pow(2)
 
 
 def _safe_json(path: Path) -> Dict[str, object]:
@@ -476,6 +532,7 @@ def load_trip_graph(row: Dict[str, str], target_cols: Sequence[str], max_paths: 
     finite_idx = [i for i, ok in enumerate(finite_mask) if ok]
     if not finite_idx:
         raise RuntimeError(f"{run_id}: no finite target nodes found")
+    arrival_target_idx = target_cols.index(ARRIVAL_TARGET_COL) if ARRIVAL_TARGET_COL in target_cols else None
 
     # Edge relations on local indices where local ordering is:
     # pins [0, P), cells [P, P+C), nets [P+C, P+C+N)
@@ -501,6 +558,8 @@ def load_trip_graph(row: Dict[str, str], target_cols: Sequence[str], max_paths: 
     net_name_to_idx: Dict[str, int] = {}
     net_acc_sum: List[List[float]] = []
     net_acc_cnt: List[int] = []
+    net_delay_sec_local: List[float] = []
+    net_delay_valid_local: List[float] = []
 
     for erow in edges_rows:
         src = node_id_to_pin_idx.get(erow.get("src_node_id", ""))
@@ -540,6 +599,19 @@ def load_trip_graph(row: Dict[str, str], target_cols: Sequence[str], max_paths: 
             rel_src["net_to_sink"].append(n_local)
             rel_dst["net_to_sink"].append(dst)
             rel_attr["net_to_sink"].append(net_attr)
+
+            delay_sec = 0.0
+            delay_valid = 0.0
+            if arrival_target_idx is not None and finite_mask[src] and finite_mask[dst]:
+                delay_sec = y_sec[dst][arrival_target_idx] - y_sec[src][arrival_target_idx]
+                if math.isfinite(delay_sec):
+                    # Net delay should not be negative; clamp noisy inversions.
+                    delay_sec = max(0.0, float(delay_sec))
+                    delay_valid = 1.0
+                else:
+                    delay_sec = 0.0
+            net_delay_sec_local.append(delay_sec)
+            net_delay_valid_local.append(delay_valid)
         else:
             rel_src["net_pair"].append(src)
             rel_dst["net_pair"].append(dst)
@@ -565,6 +637,17 @@ def load_trip_graph(row: Dict[str, str], target_cols: Sequence[str], max_paths: 
         else:
             edge_rel_local[rel] = torch.zeros((2, 0), dtype=torch.long)
             edge_attr_rel_local[rel] = torch.zeros((0, EDGE_REL_ATTR_DIM), dtype=torch.float32)
+
+    net_delay_targets_sec_t = (
+        torch.tensor(net_delay_sec_local, dtype=torch.float32)
+        if net_delay_sec_local
+        else torch.zeros((0,), dtype=torch.float32)
+    )
+    net_delay_valid_mask_t = (
+        torch.tensor(net_delay_valid_local, dtype=torch.float32)
+        if net_delay_valid_local
+        else torch.zeros((0,), dtype=torch.float32)
+    )
 
     # Path supervision: endpoint pair + (arrival, slack).
     path_pairs: List[List[int]] = []
@@ -632,6 +715,9 @@ def load_trip_graph(row: Dict[str, str], target_cols: Sequence[str], max_paths: 
         path_pairs_pin=path_pairs_t,
         path_targets_sec=path_tgts_sec,
         path_targets_norm=torch.zeros_like(path_tgts_sec),
+        net_delay_targets_sec_local=net_delay_targets_sec_t,
+        net_delay_targets_norm_local=torch.zeros_like(net_delay_targets_sec_t),
+        net_delay_valid_mask_local=net_delay_valid_mask_t,
     )
 
 
@@ -691,6 +777,24 @@ def compute_norm_stats(train_graphs: Sequence[TripGraph], target_scale: float) -
     t_std = y_all.std(dim=0, unbiased=False)
     t_std = torch.where(t_std < 1e-12, torch.ones_like(t_std), t_std)
 
+    d_rows = []
+    for g in train_graphs:
+        if int(g.net_delay_targets_sec_local.numel()) == 0:
+            continue
+        valid = g.net_delay_valid_mask_local > 0.5
+        if int(valid.sum().item()) == 0:
+            continue
+        d_rows.append(g.net_delay_targets_sec_local[valid] * float(target_scale))
+    if d_rows:
+        d_all = torch.cat(d_rows, dim=0)
+        d_mean = float(d_all.mean().item())
+        d_std = float(d_all.std(unbiased=False).item())
+        if d_std < 1e-12:
+            d_std = 1.0
+    else:
+        d_mean = 0.0
+        d_std = 1.0
+
     return TripNormStats(
         pin_mean=pin_mean.tolist(),
         pin_std=pin_std.tolist(),
@@ -703,6 +807,8 @@ def compute_norm_stats(train_graphs: Sequence[TripGraph], target_scale: float) -
         target_scale=float(target_scale),
         target_mean=t_mean.tolist(),
         target_std=t_std.tolist(),
+        net_delay_mean=d_mean,
+        net_delay_std=d_std,
     )
 
 
@@ -724,6 +830,8 @@ def apply_norm(
     t_scale = float(stats.target_scale)
     t_mean = torch.tensor(stats.target_mean, dtype=torch.float32)
     t_std = torch.tensor(stats.target_std, dtype=torch.float32)
+    d_mean = torch.tensor(float(stats.net_delay_mean), dtype=torch.float32)
+    d_std = torch.tensor(float(stats.net_delay_std), dtype=torch.float32)
 
     for g in graphs:
         g.pin_x = (g.pin_x - pin_mean) / pin_std
@@ -743,6 +851,11 @@ def apply_norm(
             g.path_targets_norm = torch.stack([arr_n, slk_n], dim=1)
         else:
             g.path_targets_norm = torch.zeros((0, 2), dtype=torch.float32)
+
+        if int(g.net_delay_targets_sec_local.numel()) > 0:
+            g.net_delay_targets_norm_local = (g.net_delay_targets_sec_local * t_scale - d_mean) / d_std
+        else:
+            g.net_delay_targets_norm_local = torch.zeros((0,), dtype=torch.float32)
 
 
 def _sample_idx(idx: "torch.Tensor", max_count: int, rng: random.Random) -> "torch.Tensor":
@@ -791,6 +904,9 @@ def make_batch(graphs: Sequence[TripGraph], loss_nodes_per_graph: int, rng: rand
     path_pair_parts: List[torch.Tensor] = []
     path_tgt_sec_parts: List[torch.Tensor] = []
     path_tgt_norm_parts: List[torch.Tensor] = []
+    net_delay_sec_parts: List[torch.Tensor] = []
+    net_delay_norm_parts: List[torch.Tensor] = []
+    net_delay_mask_parts: List[torch.Tensor] = []
 
     graph_pin_ptr = [0]
     graph_wns_sec: List[Optional[float]] = []
@@ -844,6 +960,27 @@ def make_batch(graphs: Sequence[TripGraph], loss_nodes_per_graph: int, rng: rand
             rel_dst_parts[rel].append(dst_g)
             rel_attr_parts[rel].append(ea)
 
+        n2s_edges = int(g.edge_rel_local["net_to_sink"].size(1))
+        if int(g.net_delay_targets_sec_local.numel()) != n2s_edges:
+            raise RuntimeError(
+                f"{g.run_id}: net delay targets {int(g.net_delay_targets_sec_local.numel())} "
+                f"!= net_to_sink edges {n2s_edges}"
+            )
+        if int(g.net_delay_targets_norm_local.numel()) != n2s_edges:
+            raise RuntimeError(
+                f"{g.run_id}: net delay norm targets {int(g.net_delay_targets_norm_local.numel())} "
+                f"!= net_to_sink edges {n2s_edges}"
+            )
+        if int(g.net_delay_valid_mask_local.numel()) != n2s_edges:
+            raise RuntimeError(
+                f"{g.run_id}: net delay valid mask {int(g.net_delay_valid_mask_local.numel())} "
+                f"!= net_to_sink edges {n2s_edges}"
+            )
+        if n2s_edges > 0:
+            net_delay_sec_parts.append(g.net_delay_targets_sec_local)
+            net_delay_norm_parts.append(g.net_delay_targets_norm_local)
+            net_delay_mask_parts.append(g.net_delay_valid_mask_local)
+
         if int(g.path_pairs_pin.size(0)) > 0:
             path_pair_parts.append(g.path_pairs_pin + pin_off)
             path_tgt_sec_parts.append(g.path_targets_sec)
@@ -887,6 +1024,15 @@ def make_batch(graphs: Sequence[TripGraph], loss_nodes_per_graph: int, rng: rand
         path_targets_sec = torch.zeros((0, 2), dtype=torch.float32)
         path_targets_norm = torch.zeros((0, 2), dtype=torch.float32)
 
+    if net_delay_sec_parts:
+        net_delay_targets_sec = torch.cat(net_delay_sec_parts, dim=0)
+        net_delay_targets_norm = torch.cat(net_delay_norm_parts, dim=0)
+        net_delay_valid_mask = torch.cat(net_delay_mask_parts, dim=0)
+    else:
+        net_delay_targets_sec = torch.zeros((0,), dtype=torch.float32)
+        net_delay_targets_norm = torch.zeros((0,), dtype=torch.float32)
+        net_delay_valid_mask = torch.zeros((0,), dtype=torch.float32)
+
     return TripBatch(
         pin_x=pin_x,
         cell_x=cell_x,
@@ -902,6 +1048,9 @@ def make_batch(graphs: Sequence[TripGraph], loss_nodes_per_graph: int, rng: rand
         path_pairs_global=path_pairs_global,
         path_targets_sec=path_targets_sec,
         path_targets_norm=path_targets_norm,
+        net_delay_targets_sec=net_delay_targets_sec,
+        net_delay_targets_norm=net_delay_targets_norm,
+        net_delay_valid_mask=net_delay_valid_mask,
         graph_pin_ptr=graph_pin_ptr,
         graph_wns_sec=graph_wns_sec,
         graph_run_ids=graph_run_ids,
@@ -931,7 +1080,7 @@ def denorm_to_sec(pred_norm: "torch.Tensor", stats: TripNormStats) -> "torch.Ten
     return (pred_norm * t_std + t_mean) / float(stats.target_scale)
 
 
-class TripathDualPassNet(nn.Module):
+class TripathDualPassNet(_NNModuleBase):
     def __init__(
         self,
         pin_dim: int,
@@ -945,7 +1094,11 @@ class TripathDualPassNet(nn.Module):
         cell_type_vocab_size: int = 0,
         cell_emb_dim: int = 0,
         edge_attr_dim: int = EDGE_REL_ATTR_DIM,
+        enable_edge_delay_head: bool = False,
+        enable_critical_head: bool = False,
     ) -> None:
+        if nn is None:
+            raise RuntimeError("PyTorch is unavailable in this environment.")
         super().__init__()
         self.hidden_dim = hidden_dim
         self.message_steps = message_steps
@@ -953,6 +1106,8 @@ class TripathDualPassNet(nn.Module):
         self.cell_emb_dim = max(0, int(cell_emb_dim))
         self.cell_type_vocab_size = max(0, int(cell_type_vocab_size))
         self.edge_attr_dim = max(1, int(edge_attr_dim))
+        self.enable_edge_delay_head = bool(enable_edge_delay_head)
+        self.enable_critical_head = bool(enable_critical_head)
 
         self.cell_embedding = None
         if self.cell_emb_dim > 0 and self.cell_type_vocab_size > 0:
@@ -1047,6 +1202,20 @@ class TripathDualPassNet(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, 2),  # [arrival_norm, slack_norm]
         )
+        self.edge_delay_head = None
+        if self.enable_edge_delay_head:
+            self.edge_delay_head = nn.Sequential(
+                nn.Linear(hidden_dim * 6, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, 1),  # [net_delay_norm]
+            )
+        self.critical_head = None
+        if self.enable_critical_head:
+            self.critical_head = nn.Sequential(
+                nn.Linear(hidden_dim * 4, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, 1),  # [critical_logit]
+            )
 
     def forward(
         self,
@@ -1059,7 +1228,7 @@ class TripathDualPassNet(nn.Module):
         node_graph_idx: "torch.Tensor",
         cell_type_idx: Optional["torch.Tensor"] = None,
         path_pairs_global: Optional["torch.Tensor"] = None,
-    ) -> Tuple["torch.Tensor", Optional["torch.Tensor"]]:
+    ) -> Tuple["torch.Tensor", Optional["torch.Tensor"], Optional["torch.Tensor"], Optional["torch.Tensor"]]:
         if self.cell_embedding is not None:
             if cell_type_idx is None:
                 raise RuntimeError("cell_type_idx required when cell embedding enabled")
@@ -1168,7 +1337,33 @@ class TripathDualPassNet(nn.Module):
             )
             path_pred = self.path_head(p_in)
 
-        return node_pred, path_pred
+        edge_delay_pred = None
+        if self.edge_delay_head is not None:
+            e_ns = edge_rel.get("net_to_sink")
+            if e_ns is not None and int(e_ns.size(1)) > 0:
+                src = e_ns[0]
+                dst = e_ns[1]
+                ed_in = torch.cat(
+                    [
+                        h_f[src],
+                        h_b[src],
+                        h_f[dst],
+                        h_b[dst],
+                        h_f[dst] - h_f[src],
+                        g_node[dst],
+                    ],
+                    dim=1,
+                )
+                edge_delay_pred = self.edge_delay_head(ed_in).squeeze(1)
+            else:
+                edge_delay_pred = pin_f.new_zeros((0,))
+
+        critical_logit = None
+        if self.critical_head is not None:
+            crit_in = torch.cat([pin_f, pin_b, pin_f - pin_b, g_pin], dim=1)
+            critical_logit = self.critical_head(crit_in).squeeze(1)
+
+        return node_pred, path_pred, edge_delay_pred, critical_logit
 
 
 def evaluate_model(
@@ -1182,6 +1377,7 @@ def evaluate_model(
     arrival_idx: int,
     slack_idx: int,
     seed: int,
+    critical_threshold_ps: float = 0.0,
 ) -> Dict[str, float]:
     model.eval()
     rng = random.Random(seed)
@@ -1195,8 +1391,18 @@ def evaluate_model(
     path_sq_slack_sec = 0.0
     path_abs_slack_sec = 0.0
     path_count = 0
+    edge_delay_sq_sec = 0.0
+    edge_delay_abs_sec = 0.0
+    edge_delay_count = 0
 
     wns_diffs_ps: List[float] = []
+    critical_tp = 0
+    critical_fp = 0
+    critical_fn = 0
+    critical_tn = 0
+    d_mean = float(stats.net_delay_mean)
+    d_std = float(stats.net_delay_std)
+    d_scale = float(stats.target_scale)
 
     with torch.no_grad():
         for batch in iter_batches(
@@ -1220,8 +1426,10 @@ def evaluate_model(
 
             path_pairs = batch.path_pairs_global.to(device)
             path_sec = batch.path_targets_sec.to(device)
+            edge_delay_sec = batch.net_delay_targets_sec.to(device)
+            edge_delay_mask = batch.net_delay_valid_mask.to(device) > 0.5
 
-            pred_norm, path_pred_norm = model(
+            pred_norm, path_pred_norm, edge_delay_pred_norm, critical_logit = model(
                 pin_x=pin_x,
                 cell_x=cell_x,
                 net_x=net_x,
@@ -1258,6 +1466,26 @@ def evaluate_model(
                 path_abs_slack_sec += float(d_slk.abs().sum().item())
                 path_count += int(d_slk.numel())
 
+            if (
+                edge_delay_pred_norm is not None
+                and int(edge_delay_pred_norm.size(0)) > 0
+                and int(edge_delay_mask.sum().item()) > 0
+            ):
+                pred_delay_sec = (edge_delay_pred_norm * d_std + d_mean) / d_scale
+                d_delay = pred_delay_sec[edge_delay_mask] - edge_delay_sec[edge_delay_mask]
+                edge_delay_sq_sec += float((d_delay * d_delay).sum().item())
+                edge_delay_abs_sec += float(d_delay.abs().sum().item())
+                edge_delay_count += int(d_delay.numel())
+
+            if critical_logit is not None and int(critical_logit.numel()) > 0:
+                crit_thr_sec = float(critical_threshold_ps) * 1e-12
+                crit_true = (y_sec[loss_idx, primary_idx] <= crit_thr_sec)
+                crit_pred = (critical_logit[loss_idx] >= 0.0)
+                critical_tp += int((crit_pred & crit_true).sum().item())
+                critical_fp += int((crit_pred & (~crit_true)).sum().item())
+                critical_fn += int(((~crit_pred) & crit_true).sum().item())
+                critical_tn += int(((~crit_pred) & (~crit_true)).sum().item())
+
             for gidx, wns_sec in enumerate(batch.graph_wns_sec):
                 if wns_sec is None:
                     continue
@@ -1279,6 +1507,13 @@ def evaluate_model(
             "norm_mse_avg": 0.0,
             "path_slack_rmse_ps": 0.0,
             "path_slack_mae_ps": 0.0,
+            "edge_delay_rmse_ps": 0.0,
+            "edge_delay_mae_ps": 0.0,
+            "edge_delay_count": 0.0,
+            "critical_precision": 0.0,
+            "critical_recall": 0.0,
+            "critical_f1": 0.0,
+            "critical_accuracy": 0.0,
         }
 
     norm_mse_all = [v / total_nodes for v in sq_norm]
@@ -1299,6 +1534,28 @@ def evaluate_model(
         path_slack_rmse_ps = 0.0
         path_slack_mae_ps = 0.0
 
+    if edge_delay_count > 0:
+        edge_delay_rmse_ps = math.sqrt(edge_delay_sq_sec / edge_delay_count) * 1e12
+        edge_delay_mae_ps = (edge_delay_abs_sec / edge_delay_count) * 1e12
+    else:
+        edge_delay_rmse_ps = 0.0
+        edge_delay_mae_ps = 0.0
+
+    crit_total = critical_tp + critical_fp + critical_fn + critical_tn
+    if crit_total > 0:
+        crit_precision = critical_tp / max(1, (critical_tp + critical_fp))
+        crit_recall = critical_tp / max(1, (critical_tp + critical_fn))
+        if (crit_precision + crit_recall) > 0.0:
+            crit_f1 = 2.0 * crit_precision * crit_recall / (crit_precision + crit_recall)
+        else:
+            crit_f1 = 0.0
+        crit_accuracy = (critical_tp + critical_tn) / crit_total
+    else:
+        crit_precision = 0.0
+        crit_recall = 0.0
+        crit_f1 = 0.0
+        crit_accuracy = 0.0
+
     out = {
         "norm_mse": norm_mse_all[primary_idx],
         "rmse_ps": rmse_ps_all[primary_idx],
@@ -1308,6 +1565,13 @@ def evaluate_model(
         "norm_mse_avg": sum(norm_mse_all) / len(norm_mse_all),
         "path_slack_rmse_ps": path_slack_rmse_ps,
         "path_slack_mae_ps": path_slack_mae_ps,
+        "edge_delay_rmse_ps": edge_delay_rmse_ps,
+        "edge_delay_mae_ps": edge_delay_mae_ps,
+        "edge_delay_count": float(edge_delay_count),
+        "critical_precision": crit_precision,
+        "critical_recall": crit_recall,
+        "critical_f1": crit_f1,
+        "critical_accuracy": crit_accuracy,
     }
     for j in range(t):
         out[f"norm_mse_t{j}"] = norm_mse_all[j]
@@ -1339,6 +1603,7 @@ def main() -> None:
     ap.add_argument("--max-train-runs", type=int, default=0)
     ap.add_argument("--max-val-runs", type=int, default=0)
     ap.add_argument("--max-test-runs", type=int, default=0)
+    ap.add_argument("--data-workers", type=int, default=1, help="Parallel workers for graph loading")
     ap.add_argument("--batch-graphs", type=int, default=2)
     ap.add_argument("--loss-nodes-per-graph-train", type=int, default=2048)
     ap.add_argument("--loss-nodes-per-graph-eval", type=int, default=0)
@@ -1352,6 +1617,12 @@ def main() -> None:
     ap.add_argument("--lr", type=float, default=8e-4)
     ap.add_argument("--weight-decay", type=float, default=1e-5)
     ap.add_argument("--epochs", type=int, default=40)
+    ap.add_argument(
+        "--eval-every",
+        type=int,
+        default=1,
+        help="Run full train/val/test eval every N epochs (always epoch 1 and final epoch).",
+    )
     ap.add_argument("--early-stop-patience", type=int, default=10)
 
     ap.add_argument("--consistency-weight", type=float, default=5e-4)
@@ -1360,7 +1631,13 @@ def main() -> None:
     ap.add_argument("--rank-margin-norm", type=float, default=0.05)
     ap.add_argument("--critical-loss-weight", type=float, default=1.0)
     ap.add_argument("--critical-threshold-ps", type=float, default=0.0)
+    ap.add_argument("--critical-aux-weight", type=float, default=0.0)
+    ap.add_argument("--critical-pos-weight", type=float, default=1.0)
+    ap.add_argument("--regression-loss", choices=["mse", "huber"], default="mse")
+    ap.add_argument("--huber-delta-norm", type=float, default=0.1)
     ap.add_argument("--path-aux-weight", type=float, default=0.2)
+    ap.add_argument("--edge-delay-aux-weight", type=float, default=0.0)
+    ap.add_argument("--grad-clip-norm", type=float, default=0.0)
 
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
@@ -1368,6 +1645,10 @@ def main() -> None:
     ap.add_argument("--out-dir", default="results/train_runs")
     ap.add_argument("--run-name", default="")
     args = ap.parse_args()
+    if args.eval_every < 1:
+        raise SystemExit("--eval-every must be >= 1")
+    if args.huber_delta_norm <= 0.0:
+        raise SystemExit("--huber-delta-norm must be > 0")
 
     require_torch()
     if torch is None or nn is None:
@@ -1407,9 +1688,16 @@ def main() -> None:
         f"targets={','.join(target_cols)} primary={args.primary_target_col}"
     )
 
-    train_graphs = [load_trip_graph(r, target_cols, max_paths=args.max_paths_per_graph) for r in train_rows]
-    val_graphs = [load_trip_graph(r, target_cols, max_paths=args.max_paths_per_graph) for r in val_rows]
-    test_graphs = [load_trip_graph(r, target_cols, max_paths=args.max_paths_per_graph) for r in test_rows]
+    print(f"graph_loading workers={args.data_workers}")
+    train_graphs = _load_trip_graphs_parallel(
+        train_rows, target_cols, args.max_paths_per_graph, args.data_workers
+    )
+    val_graphs = _load_trip_graphs_parallel(
+        val_rows, target_cols, args.max_paths_per_graph, args.data_workers
+    )
+    test_graphs = _load_trip_graphs_parallel(
+        test_rows, target_cols, args.max_paths_per_graph, args.data_workers
+    )
 
     cell_vocab: Dict[str, int] = {}
     if args.cell_emb_dim > 0:
@@ -1438,6 +1726,8 @@ def main() -> None:
         cell_type_vocab_size=len(cell_vocab),
         cell_emb_dim=(args.cell_emb_dim if args.cell_emb_dim > 0 else 0),
         edge_attr_dim=int(train_graphs[0].edge_attr_rel_local[RELATIONS[0]].size(1)),
+        enable_edge_delay_head=(float(args.edge_delay_aux_weight) > 0.0),
+        enable_critical_head=(float(args.critical_aux_weight) > 0.0),
     ).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -1472,6 +1762,8 @@ def main() -> None:
             "cell_emb_dim": (args.cell_emb_dim if args.cell_emb_dim > 0 else 0),
             "cell_type_vocab_size": len(cell_vocab),
             "edge_attr_dim": int(train_graphs[0].edge_attr_rel_local[RELATIONS[0]].size(1)),
+            "enable_edge_delay_head": (float(args.edge_delay_aux_weight) > 0.0),
+            "enable_critical_head": (float(args.critical_aux_weight) > 0.0),
         },
         "cell_type_vocab": cell_vocab,
         "normalization": stats.to_dict(),
@@ -1483,6 +1775,8 @@ def main() -> None:
     bad_epochs = 0
     rows: List[Dict[str, object]] = []
     train_rng = random.Random(args.seed + 101)
+    last_val_metrics: Dict[str, float] = {}
+    last_test_metrics: Dict[str, float] = {}
 
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -1509,9 +1803,11 @@ def main() -> None:
             loss_idx = batch.loss_idx.to(device)
             path_pairs = batch.path_pairs_global.to(device)
             path_targets_norm = batch.path_targets_norm.to(device)
+            edge_delay_targets_norm = batch.net_delay_targets_norm.to(device)
+            edge_delay_valid_mask = batch.net_delay_valid_mask.to(device) > 0.5
 
             optimizer.zero_grad(set_to_none=True)
-            pred_norm, path_pred_norm = model(
+            pred_norm, path_pred_norm, edge_delay_pred_norm, critical_logit = model(
                 pin_x=pin_x,
                 cell_x=cell_x,
                 net_x=net_x,
@@ -1533,10 +1829,19 @@ def main() -> None:
                     thr_sec = float(args.critical_threshold_ps) * 1e-12
                     crit = (y_sec[loss_idx, primary_idx] <= thr_sec).float()
                     weights = 1.0 + (float(args.critical_loss_weight) - 1.0) * crit
-                    sq = diff[:, j].pow(2)
-                    tl = (weights * sq).sum() / weights.sum().clamp(min=1.0)
+                    reg_elem = _elementwise_regression_loss(
+                        diff=diff[:, j],
+                        mode=args.regression_loss,
+                        huber_delta_norm=float(args.huber_delta_norm),
+                    )
+                    tl = (weights * reg_elem).sum() / weights.sum().clamp(min=1.0)
                 else:
-                    tl = diff[:, j].pow(2).mean()
+                    reg_elem = _elementwise_regression_loss(
+                        diff=diff[:, j],
+                        mode=args.regression_loss,
+                        huber_delta_norm=float(args.huber_delta_norm),
+                    )
+                    tl = reg_elem.mean()
                 t_losses.append(tl)
             t_loss_vec = torch.stack(t_losses, dim=0)
             loss = (t_loss_vec * target_w_t).sum() / target_w_t.sum().clamp(min=1e-12)
@@ -1560,7 +1865,44 @@ def main() -> None:
                 path_loss = (path_pred_norm - path_targets_norm).pow(2).mean()
                 loss = loss + float(args.path_aux_weight) * path_loss
 
+            if (
+                edge_delay_pred_norm is not None
+                and int(edge_delay_pred_norm.size(0)) > 0
+                and int(edge_delay_valid_mask.sum().item()) > 0
+                and float(args.edge_delay_aux_weight) > 0.0
+            ):
+                ed_loss = (
+                    edge_delay_pred_norm[edge_delay_valid_mask] - edge_delay_targets_norm[edge_delay_valid_mask]
+                ).pow(2).mean()
+                loss = loss + float(args.edge_delay_aux_weight) * ed_loss
+
+            if (
+                critical_logit is not None
+                and int(critical_logit.numel()) > 0
+                and float(args.critical_aux_weight) > 0.0
+            ):
+                thr_sec = float(args.critical_threshold_ps) * 1e-12
+                crit_true = (y_sec[loss_idx, primary_idx] <= thr_sec).float()
+                if int(crit_true.numel()) > 0:
+                    if F is None:
+                        raise RuntimeError("PyTorch functional API unavailable for critical auxiliary loss.")
+                    pos_weight = None
+                    if float(args.critical_pos_weight) > 0.0:
+                        pos_weight = torch.tensor(
+                            float(args.critical_pos_weight),
+                            dtype=critical_logit.dtype,
+                            device=critical_logit.device,
+                        )
+                    crit_loss = F.binary_cross_entropy_with_logits(
+                        critical_logit[loss_idx],
+                        crit_true,
+                        pos_weight=pos_weight,
+                    )
+                    loss = loss + float(args.critical_aux_weight) * crit_loss
+
             loss.backward()
+            if float(args.grad_clip_norm) > 0.0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), float(args.grad_clip_norm))
             optimizer.step()
 
             n = int(loss_idx.numel())
@@ -1569,66 +1911,101 @@ def main() -> None:
 
         train_loss = total_loss / max(1, total_nodes)
 
-        train_metrics = evaluate_model(
-            model=model,
-            graphs=train_graphs,
-            stats=stats,
-            device=device,
-            batch_graphs=args.batch_graphs,
-            loss_nodes_per_graph=args.loss_nodes_per_graph_eval,
-            primary_idx=primary_idx,
-            arrival_idx=arrival_idx,
-            slack_idx=slack_idx,
-            seed=args.seed + epoch * 11 + 1,
-        )
-        val_metrics = evaluate_model(
-            model=model,
-            graphs=val_graphs,
-            stats=stats,
-            device=device,
-            batch_graphs=args.batch_graphs,
-            loss_nodes_per_graph=args.loss_nodes_per_graph_eval,
-            primary_idx=primary_idx,
-            arrival_idx=arrival_idx,
-            slack_idx=slack_idx,
-            seed=args.seed + epoch * 11 + 3,
-        )
-        test_metrics = evaluate_model(
-            model=model,
-            graphs=test_graphs,
-            stats=stats,
-            device=device,
-            batch_graphs=args.batch_graphs,
-            loss_nodes_per_graph=args.loss_nodes_per_graph_eval,
-            primary_idx=primary_idx,
-            arrival_idx=arrival_idx,
-            slack_idx=slack_idx,
-            seed=args.seed + epoch * 11 + 5,
-        )
+        do_eval = (epoch == 1) or (epoch == args.epochs) or ((epoch % args.eval_every) == 0)
+        train_metrics: Dict[str, float] = {}
+        val_metrics: Dict[str, float] = {}
+        test_metrics: Dict[str, float] = {}
+        if do_eval:
+            train_metrics = evaluate_model(
+                model=model,
+                graphs=train_graphs,
+                stats=stats,
+                device=device,
+                batch_graphs=args.batch_graphs,
+                loss_nodes_per_graph=args.loss_nodes_per_graph_eval,
+                primary_idx=primary_idx,
+                arrival_idx=arrival_idx,
+                slack_idx=slack_idx,
+                seed=args.seed + epoch * 11 + 1,
+                critical_threshold_ps=float(args.critical_threshold_ps),
+            )
+            val_metrics = evaluate_model(
+                model=model,
+                graphs=val_graphs,
+                stats=stats,
+                device=device,
+                batch_graphs=args.batch_graphs,
+                loss_nodes_per_graph=args.loss_nodes_per_graph_eval,
+                primary_idx=primary_idx,
+                arrival_idx=arrival_idx,
+                slack_idx=slack_idx,
+                seed=args.seed + epoch * 11 + 3,
+                critical_threshold_ps=float(args.critical_threshold_ps),
+            )
+            test_metrics = evaluate_model(
+                model=model,
+                graphs=test_graphs,
+                stats=stats,
+                device=device,
+                batch_graphs=args.batch_graphs,
+                loss_nodes_per_graph=args.loss_nodes_per_graph_eval,
+                primary_idx=primary_idx,
+                arrival_idx=arrival_idx,
+                slack_idx=slack_idx,
+                seed=args.seed + epoch * 11 + 5,
+                critical_threshold_ps=float(args.critical_threshold_ps),
+            )
+            last_val_metrics = val_metrics
+            last_test_metrics = test_metrics
 
-        row = {
-            "epoch": epoch,
-            "train_loss": train_loss,
-            "train_norm_mse": train_metrics["norm_mse"],
-            "train_rmse_ps": train_metrics["rmse_ps"],
-            "val_norm_mse": val_metrics["norm_mse"],
-            "val_rmse_ps": val_metrics["rmse_ps"],
-            "test_norm_mse": test_metrics["norm_mse"],
-            "test_rmse_ps": test_metrics["rmse_ps"],
-            "val_wns_mae_ps": val_metrics["wns_mae_ps"],
-            "test_wns_mae_ps": test_metrics["wns_mae_ps"],
-            "val_path_slack_rmse_ps": val_metrics.get("path_slack_rmse_ps", 0.0),
-            "test_path_slack_rmse_ps": test_metrics.get("path_slack_rmse_ps", 0.0),
-        }
+            row = {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train_norm_mse": train_metrics["norm_mse"],
+                "train_rmse_ps": train_metrics["rmse_ps"],
+                "val_norm_mse": val_metrics["norm_mse"],
+                "val_rmse_ps": val_metrics["rmse_ps"],
+                "test_norm_mse": test_metrics["norm_mse"],
+                "test_rmse_ps": test_metrics["rmse_ps"],
+                "val_wns_mae_ps": val_metrics["wns_mae_ps"],
+                "test_wns_mae_ps": test_metrics["wns_mae_ps"],
+                "val_path_slack_rmse_ps": val_metrics.get("path_slack_rmse_ps", 0.0),
+                "test_path_slack_rmse_ps": test_metrics.get("path_slack_rmse_ps", 0.0),
+                "val_edge_delay_rmse_ps": val_metrics.get("edge_delay_rmse_ps", 0.0),
+                "test_edge_delay_rmse_ps": test_metrics.get("edge_delay_rmse_ps", 0.0),
+                "val_critical_f1": val_metrics.get("critical_f1", 0.0),
+                "test_critical_f1": test_metrics.get("critical_f1", 0.0),
+            }
+            print(
+                f"epoch={epoch:03d} train_loss={train_loss:.6e} "
+                f"val_norm_mse={val_metrics['norm_mse']:.6e} "
+                f"val_rmse_ps={val_metrics['rmse_ps']:.3f} "
+                f"test_rmse_ps={test_metrics['rmse_ps']:.3f} "
+                f"test_path_slack_rmse_ps={test_metrics.get('path_slack_rmse_ps', 0.0):.3f} "
+                f"test_edge_delay_rmse_ps={test_metrics.get('edge_delay_rmse_ps', 0.0):.3f} "
+                f"test_critical_f1={test_metrics.get('critical_f1', 0.0):.4f}"
+            )
+        else:
+            row = {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train_norm_mse": "",
+                "train_rmse_ps": "",
+                "val_norm_mse": "",
+                "val_rmse_ps": "",
+                "test_norm_mse": "",
+                "test_rmse_ps": "",
+                "val_wns_mae_ps": "",
+                "test_wns_mae_ps": "",
+                "val_path_slack_rmse_ps": "",
+                "test_path_slack_rmse_ps": "",
+                "val_edge_delay_rmse_ps": "",
+                "test_edge_delay_rmse_ps": "",
+                "val_critical_f1": "",
+                "test_critical_f1": "",
+            }
+            print(f"epoch={epoch:03d} train_loss={train_loss:.6e} eval=skipped")
         rows.append(row)
-
-        print(
-            f"epoch={epoch:03d} train_loss={train_loss:.6e} "
-            f"val_norm_mse={val_metrics['norm_mse']:.6e} "
-            f"val_rmse_ps={val_metrics['rmse_ps']:.3f} "
-            f"test_rmse_ps={test_metrics['rmse_ps']:.3f} "
-            f"test_path_slack_rmse_ps={test_metrics.get('path_slack_rmse_ps', 0.0):.3f}"
-        )
 
         ckpt = {
             "epoch": epoch,
@@ -1647,23 +2024,25 @@ def main() -> None:
             "train_ids": config_payload["train_ids"],
             "val_ids": config_payload["val_ids"],
             "test_ids": config_payload["test_ids"],
-            "val_metrics": val_metrics,
-            "test_metrics": test_metrics,
+            "val_metrics": (val_metrics if do_eval else last_val_metrics),
+            "test_metrics": (test_metrics if do_eval else last_test_metrics),
+            "eval_epoch": do_eval,
         }
         torch.save(ckpt, run_dir / "last.pt")
 
-        cur = float(val_metrics["norm_mse"])
-        if cur < best_val:
-            best_val = cur
-            best_epoch = epoch
-            bad_epochs = 0
-            torch.save(ckpt, run_dir / "best.pt")
-        else:
-            bad_epochs += 1
+        if do_eval:
+            cur = float(val_metrics["norm_mse"])
+            if cur < best_val:
+                best_val = cur
+                best_epoch = epoch
+                bad_epochs = 0
+                torch.save(ckpt, run_dir / "best.pt")
+            else:
+                bad_epochs += 1
 
-        if bad_epochs >= args.early_stop_patience:
-            print(f"early_stop epoch={epoch} patience={args.early_stop_patience}")
-            break
+            if bad_epochs >= args.early_stop_patience:
+                print(f"early_stop epoch={epoch} patience={args.early_stop_patience}")
+                break
 
     _write_epoch_csv(run_dir / "epoch_metrics.csv", rows)
 
@@ -1680,6 +2059,7 @@ def main() -> None:
         arrival_idx=arrival_idx,
         slack_idx=slack_idx,
         seed=args.seed + 999,
+        critical_threshold_ps=float(args.critical_threshold_ps),
     )
 
     summary = {

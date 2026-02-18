@@ -39,7 +39,9 @@ def _print_block(name: str, m: Dict[str, float]) -> None:
         f"rmse_ps={m['rmse_ps']:.3f} "
         f"mae_ps={m['mae_ps']:.3f} "
         f"wns_mae_ps={m['wns_mae_ps']:.3f} "
-        f"path_slack_rmse_ps={m.get('path_slack_rmse_ps', 0.0):.3f}"
+        f"path_slack_rmse_ps={m.get('path_slack_rmse_ps', 0.0):.3f} "
+        f"edge_delay_rmse_ps={m.get('edge_delay_rmse_ps', 0.0):.3f} "
+        f"critical_f1={m.get('critical_f1', 0.0):.4f}"
     )
 
 
@@ -135,6 +137,8 @@ def main() -> None:
         cell_type_vocab_size=int(model_cfg.get("cell_type_vocab_size", len(cell_vocab))),
         cell_emb_dim=int(model_cfg.get("cell_emb_dim", 0)),
         edge_attr_dim=int(model_cfg.get("edge_attr_dim", len(EDGE_NUMERIC_COLS) + 2)),
+        enable_edge_delay_head=bool(model_cfg.get("enable_edge_delay_head", False)),
+        enable_critical_head=bool(model_cfg.get("enable_critical_head", False)),
     ).to(device)
     model.load_state_dict(ckpt["model_state"])
 
@@ -164,6 +168,7 @@ def main() -> None:
         arrival_idx=arrival_idx,
         slack_idx=slack_idx,
         seed=args.seed + 1,
+        critical_threshold_ps=float(train_args.get("critical_threshold_ps", 0.0)),
     )
     val_metrics = evaluate_model(
         model=model,
@@ -176,6 +181,7 @@ def main() -> None:
         arrival_idx=arrival_idx,
         slack_idx=slack_idx,
         seed=args.seed + 3,
+        critical_threshold_ps=float(train_args.get("critical_threshold_ps", 0.0)),
     )
     test_metrics = evaluate_model(
         model=model,
@@ -188,6 +194,7 @@ def main() -> None:
         arrival_idx=arrival_idx,
         slack_idx=slack_idx,
         seed=args.seed + 5,
+        critical_threshold_ps=float(train_args.get("critical_threshold_ps", 0.0)),
     )
 
     print(f"eval={eval_tag}")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract setup-max timing paths and summarize critical path ranking."""
+"""Extract setup-max and hold-min timing paths and summarize path ranking."""
 
 from __future__ import annotations
 
@@ -11,8 +11,62 @@ from pathlib import Path
 from openroad import Design, Tech
 
 
+def _run_report(
+    design: Design,
+    out_json: Path,
+    path_delay: str,
+    group_path_count: int,
+    endpoint_path_count: int,
+) -> None:
+    cmd = (
+        f"report_checks -path_delay {path_delay} -sort_by_slack "
+        f"-group_path_count {group_path_count} "
+        f"-endpoint_path_count {endpoint_path_count} "
+        "-unique_paths_to_endpoint -format json "
+        f"> {out_json}"
+    )
+    design.evalTclString(cmd)
+
+
+def _write_summary_csv(
+    checks: list,
+    out_csv: Path,
+    run_id: str,
+    path_id_prefix: str,
+) -> int:
+    rows = []
+    for idx, check in enumerate(checks, start=1):
+        rows.append(
+            {
+                "path_id": f"{run_id}__{path_id_prefix}{idx:04d}",
+                "startpoint": check.get("startpoint", ""),
+                "endpoint": check.get("endpoint", ""),
+                "path_group": check.get("path_group", ""),
+                "data_arrival_time_s": check.get("data_arrival_time", ""),
+                "required_time_s": check.get("required_time", ""),
+                "slack_s": check.get("slack", ""),
+                "rank": idx,
+            }
+        )
+    fields = [
+        "path_id",
+        "startpoint",
+        "endpoint",
+        "path_group",
+        "data_arrival_time_s",
+        "required_time_s",
+        "slack_s",
+        "rank",
+    ]
+    with out_csv.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    return len(rows)
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Extract max-delay timing paths in JSON and summary CSV")
+    parser = argparse.ArgumentParser(description="Extract timing paths in JSON and summary CSV")
     parser.add_argument("--odb", required=True)
     parser.add_argument("--sdc", required=True)
     parser.add_argument("--spef", required=True)
@@ -21,6 +75,8 @@ def main() -> None:
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--group-path-count", type=int, default=200)
     parser.add_argument("--endpoint-path-count", type=int, default=1)
+    parser.add_argument("--skip-max", action="store_true", help="Skip setup/max path extraction.")
+    parser.add_argument("--skip-min", action="store_true", help="Skip hold/min path extraction.")
     args = parser.parse_args()
 
     odb_path = Path(args.odb).resolve()
@@ -37,63 +93,57 @@ def main() -> None:
     design.evalTclString(f"read_sdc {sdc_path}")
     design.evalTclString(f"read_spef {spef_path}")
 
-    json_path = out_dir / "paths_setup_max.json"
-    cmd = (
-        "report_checks -path_delay max -sort_by_slack "
-        f"-group_path_count {args.group_path_count} "
-        f"-endpoint_path_count {args.endpoint_path_count} "
-        "-unique_paths_to_endpoint -format json "
-        f"> {json_path}"
-    )
-    design.evalTclString(cmd)
+    counts = {}
+    outputs = {}
 
-    data = {"checks": []}
-    if json_path.exists():
-        with json_path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-
-    checks = list(data.get("checks", []))
-    checks.sort(key=lambda c: float(c.get("slack", 1e99)))
-
-    rows = []
-    for idx, check in enumerate(checks, start=1):
-        rows.append(
-            {
-                "path_id": f"{args.run_id}__path{idx:04d}",
-                "startpoint": check.get("startpoint", ""),
-                "endpoint": check.get("endpoint", ""),
-                "path_group": check.get("path_group", ""),
-                "data_arrival_time_s": check.get("data_arrival_time", ""),
-                "required_time_s": check.get("required_time", ""),
-                "slack_s": check.get("slack", ""),
-                "rank": idx,
-            }
+    if not args.skip_max:
+        max_json = out_dir / "paths_setup_max.json"
+        _run_report(
+            design=design,
+            out_json=max_json,
+            path_delay="max",
+            group_path_count=args.group_path_count,
+            endpoint_path_count=args.endpoint_path_count,
         )
+        max_data = {"checks": []}
+        if max_json.exists():
+            with max_json.open("r", encoding="utf-8") as f:
+                max_data = json.load(f)
+        max_checks = list(max_data.get("checks", []))
+        max_checks.sort(key=lambda c: float(c.get("slack", 1e99)))
+        # Legacy setup-max summary path kept for compatibility with existing pipeline.
+        max_csv = out_dir / "paths_summary.csv"
+        counts["setup_max"] = _write_summary_csv(max_checks, max_csv, args.run_id, "path")
+        outputs["setup_max_json"] = str(max_json)
+        outputs["setup_max_csv"] = str(max_csv)
 
-    csv_path = out_dir / "paths_summary.csv"
-    fields = [
-        "path_id",
-        "startpoint",
-        "endpoint",
-        "path_group",
-        "data_arrival_time_s",
-        "required_time_s",
-        "slack_s",
-        "rank",
-    ]
-    with csv_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fields)
-        writer.writeheader()
-        writer.writerows(rows)
+    if not args.skip_min:
+        min_json = out_dir / "paths_hold_min.json"
+        _run_report(
+            design=design,
+            out_json=min_json,
+            path_delay="min",
+            group_path_count=args.group_path_count,
+            endpoint_path_count=args.endpoint_path_count,
+        )
+        min_data = {"checks": []}
+        if min_json.exists():
+            with min_json.open("r", encoding="utf-8") as f:
+                min_data = json.load(f)
+        min_checks = list(min_data.get("checks", []))
+        min_checks.sort(key=lambda c: float(c.get("slack", 1e99)))
+        min_csv = out_dir / "paths_hold_summary.csv"
+        counts["hold_min"] = _write_summary_csv(min_checks, min_csv, args.run_id, "hold_path")
+        outputs["hold_min_json"] = str(min_json)
+        outputs["hold_min_csv"] = str(min_csv)
 
     print(
         "path_extraction_complete",
         json.dumps(
             {
                 "run_id": args.run_id,
-                "path_count": len(rows),
-                "json": str(json_path),
-                "csv": str(csv_path),
+                "counts": counts,
+                "outputs": outputs,
             }
         ),
     )

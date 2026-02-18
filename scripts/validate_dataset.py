@@ -50,6 +50,19 @@ def rc_csv_has_data(path: Path) -> bool:
     return False
 
 
+def min_path_slack_s(path: Path) -> float:
+    if not path.exists():
+        return float("nan")
+    vals = []
+    with path.open("r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            v = to_float(row.get("slack_s"))
+            if is_finite(v):
+                vals.append(v)
+    return min(vals) if vals else float("nan")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Validate extracted dataset for one run")
     parser.add_argument("--run-id", required=True)
@@ -58,6 +71,11 @@ def main() -> None:
     parser.add_argument("--min-finite-coverage", type=float, default=0.8)
     parser.add_argument("--required-eps", type=float, default=1e-12)
     parser.add_argument("--wns-tol-ps", type=float, default=5.0)
+    parser.add_argument(
+        "--allow-wns-mismatch",
+        action="store_true",
+        help="Treat WNS/HOLD-WNS mismatch findings as warnings instead of hard failure.",
+    )
     args = parser.parse_args()
 
     run_dir = Path(args.processed_root).resolve() / args.run_id
@@ -68,9 +86,11 @@ def main() -> None:
     nodes_path = run_dir / "nodes.csv"
     edges_path = run_dir / "edges.csv"
     labels_path = run_dir / "labels_setup_max.csv"
+    paths_path = run_dir / "paths_summary.csv"
+    hold_paths_path = run_dir / "paths_hold_summary.csv"
     global_path = run_dir / "global_features.json"
 
-    for p in [nodes_path, edges_path, labels_path, global_path]:
+    for p in [nodes_path, edges_path, labels_path, paths_path, global_path]:
         if not p.exists():
             issues.append(f"missing file: {p}")
 
@@ -194,20 +214,35 @@ def main() -> None:
     if req_bad > 0:
         issues.append(f"required != arrival + slack rows: {req_bad}")
 
+    path_min_slack = min_path_slack_s(paths_path)
+    hold_min_slack = min_path_slack_s(hold_paths_path)
+
     wns_ns = global_features.get("wns_ns")
-    if wns_ns is not None and is_finite(min_slack):
+    # WNS in finish report is a path-level metric, so validate against min path slack.
+    # Fallback to node min slack only if path summary is unavailable.
+    wns_ref_slack = path_min_slack if is_finite(path_min_slack) else min_slack
+    if wns_ns is not None and is_finite(wns_ref_slack):
         wns_s = float(wns_ns) * 1e-9
         tol_s = args.wns_tol_ps * 1e-12
         # ORFS summary WNS is often clamped at 0 when setup timing is met.
         # In that case, enforce only that min extracted slack is not negative.
         if wns_s >= 0:
-            if min_slack < -tol_s:
+            if wns_ref_slack < -tol_s:
                 issues.append(
-                    f"WNS/sign mismatch: min_label_slack={min_slack:.3e}s is negative while report_wns={wns_s:.3e}s (tol={tol_s:.3e}s)"
+                    f"WNS/sign mismatch: ref_slack={wns_ref_slack:.3e}s is negative while report_wns={wns_s:.3e}s (tol={tol_s:.3e}s)"
                 )
-        elif abs(min_slack - wns_s) > tol_s:
+        elif abs(wns_ref_slack - wns_s) > tol_s:
             issues.append(
-                f"WNS mismatch: min_label_slack={min_slack:.3e}s vs report_wns={wns_s:.3e}s (tol={tol_s:.3e}s)"
+                f"WNS mismatch: ref_slack={wns_ref_slack:.3e}s vs report_wns={wns_s:.3e}s (tol={tol_s:.3e}s)"
+            )
+
+    wns_hold_ns = global_features.get("wns_hold_ns")
+    if wns_hold_ns is not None and is_finite(hold_min_slack):
+        wns_hold_s = float(wns_hold_ns) * 1e-9
+        tol_s = args.wns_tol_ps * 1e-12
+        if abs(hold_min_slack - wns_hold_s) > tol_s:
+            issues.append(
+                f"HOLD WNS mismatch: hold_min_slack={hold_min_slack:.3e}s vs wns_hold={wns_hold_s:.3e}s (tol={tol_s:.3e}s)"
             )
 
     rc_required = rc_csv_has_data(raw_dir / "6_net_rc.csv")
@@ -224,18 +259,29 @@ def main() -> None:
         if rc_joined == 0:
             issues.append("RC join sanity failed: no net edge has joined RCX data")
 
+    warnings = []
+    if issues and args.allow_wns_mismatch:
+        wns_prefixes = ("WNS mismatch:", "WNS/sign mismatch:", "HOLD WNS mismatch:")
+        if all(issue.startswith(wns_prefixes) for issue in issues):
+            warnings = list(issues)
+            issues = []
+
     passed = len(issues) == 0
     report = {
         "run_id": args.run_id,
         "passed": passed,
         "issues": issues,
+        "warnings": warnings,
         "stats": {
             "num_nodes": len(nodes),
             "num_edges": len(edges),
             "num_labels": len(labels),
             "finite_slack_coverage": coverage,
             "min_label_slack_s": None if not is_finite(min_slack) else min_slack,
+            "min_path_slack_s": None if not is_finite(path_min_slack) else path_min_slack,
+            "min_hold_path_slack_s": None if not is_finite(hold_min_slack) else hold_min_slack,
             "wns_ns": wns_ns,
+            "wns_hold_ns": wns_hold_ns,
         },
     }
 

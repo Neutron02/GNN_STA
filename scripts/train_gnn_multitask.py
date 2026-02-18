@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
 import json
 import random
@@ -98,6 +99,21 @@ def _target_idx(target_cols: Sequence[str], col: str) -> int:
     return int(target_cols.index(col))
 
 
+def _load_graphs_parallel(
+    rows: Sequence[Dict[str, str]],
+    target_cols: Sequence[str],
+    workers: int,
+) -> List:
+    if workers <= 1:
+        return [load_graph_multi(r, target_cols) for r in rows]
+    out: List = [None] * len(rows)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        fut_to_idx = {ex.submit(load_graph_multi, row, target_cols): i for i, row in enumerate(rows)}
+        for fut in concurrent.futures.as_completed(fut_to_idx):
+            out[fut_to_idx[fut]] = fut.result()
+    return out
+
+
 def _pairwise_rank_loss(
     pred: "torch.Tensor",
     truth: "torch.Tensor",
@@ -149,6 +165,7 @@ def main() -> None:
     ap.add_argument("--max-train-runs", type=int, default=0)
     ap.add_argument("--max-val-runs", type=int, default=0)
     ap.add_argument("--max-test-runs", type=int, default=0)
+    ap.add_argument("--data-workers", type=int, default=1, help="Parallel workers for graph loading")
     ap.add_argument("--batch-graphs", type=int, default=2)
     ap.add_argument("--loss-nodes-per-graph-train", type=int, default=2048)
     ap.add_argument("--loss-nodes-per-graph-eval", type=int, default=0)
@@ -163,6 +180,12 @@ def main() -> None:
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--weight-decay", type=float, default=1e-5)
     ap.add_argument("--epochs", type=int, default=60)
+    ap.add_argument(
+        "--eval-every",
+        type=int,
+        default=1,
+        help="Run full train/val/test eval every N epochs (always epoch 1 and final epoch).",
+    )
     ap.add_argument("--early-stop-patience", type=int, default=10)
     ap.add_argument("--consistency-weight", type=float, default=1e-4)
     ap.add_argument("--rank-loss-weight", type=float, default=0.02)
@@ -176,6 +199,8 @@ def main() -> None:
     ap.add_argument("--out-dir", default="results/train_runs")
     ap.add_argument("--run-name", default="")
     args = ap.parse_args()
+    if args.eval_every < 1:
+        raise SystemExit("--eval-every must be >= 1")
 
     require_torch()
     require_torch_models()
@@ -216,9 +241,10 @@ def main() -> None:
         f"targets={','.join(target_cols)} primary={args.primary_target_col}"
     )
 
-    train_graphs = [load_graph_multi(r, target_cols) for r in train_rows]
-    val_graphs = [load_graph_multi(r, target_cols) for r in val_rows]
-    test_graphs = [load_graph_multi(r, target_cols) for r in test_rows]
+    print(f"graph_loading workers={args.data_workers}")
+    train_graphs = _load_graphs_parallel(train_rows, target_cols, args.data_workers)
+    val_graphs = _load_graphs_parallel(val_rows, target_cols, args.data_workers)
+    test_graphs = _load_graphs_parallel(test_rows, target_cols, args.data_workers)
 
     cell_vocab: Dict[str, int] = {}
     if args.cell_emb_dim > 0:
@@ -292,6 +318,8 @@ def main() -> None:
     bad_epochs = 0
     epoch_rows: List[Dict[str, object]] = []
     train_rng = random.Random(args.seed + 101)
+    last_val_metrics: Dict[str, float] = {}
+    last_test_metrics: Dict[str, float] = {}
 
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -361,58 +389,78 @@ def main() -> None:
 
         train_loss = total_loss / max(1, total_nodes)
 
-        train_metrics = evaluate_model_multi(
-            model=model,
-            graphs=train_graphs,
-            stats=stats,
-            device=device,
-            batch_graphs=args.batch_graphs,
-            loss_nodes_per_graph=args.loss_nodes_per_graph_eval,
-            primary_idx=primary_idx,
-            seed=args.seed + epoch * 11 + 1,
-        )
-        val_metrics = evaluate_model_multi(
-            model=model,
-            graphs=val_graphs,
-            stats=stats,
-            device=device,
-            batch_graphs=args.batch_graphs,
-            loss_nodes_per_graph=args.loss_nodes_per_graph_eval,
-            primary_idx=primary_idx,
-            seed=args.seed + epoch * 11 + 3,
-        )
-        test_metrics = evaluate_model_multi(
-            model=model,
-            graphs=test_graphs,
-            stats=stats,
-            device=device,
-            batch_graphs=args.batch_graphs,
-            loss_nodes_per_graph=args.loss_nodes_per_graph_eval,
-            primary_idx=primary_idx,
-            seed=args.seed + epoch * 11 + 5,
-        )
+        do_eval = (epoch == 1) or (epoch == args.epochs) or ((epoch % args.eval_every) == 0)
+        train_metrics: Dict[str, float] = {}
+        val_metrics: Dict[str, float] = {}
+        test_metrics: Dict[str, float] = {}
+        if do_eval:
+            train_metrics = evaluate_model_multi(
+                model=model,
+                graphs=train_graphs,
+                stats=stats,
+                device=device,
+                batch_graphs=args.batch_graphs,
+                loss_nodes_per_graph=args.loss_nodes_per_graph_eval,
+                primary_idx=primary_idx,
+                seed=args.seed + epoch * 11 + 1,
+            )
+            val_metrics = evaluate_model_multi(
+                model=model,
+                graphs=val_graphs,
+                stats=stats,
+                device=device,
+                batch_graphs=args.batch_graphs,
+                loss_nodes_per_graph=args.loss_nodes_per_graph_eval,
+                primary_idx=primary_idx,
+                seed=args.seed + epoch * 11 + 3,
+            )
+            test_metrics = evaluate_model_multi(
+                model=model,
+                graphs=test_graphs,
+                stats=stats,
+                device=device,
+                batch_graphs=args.batch_graphs,
+                loss_nodes_per_graph=args.loss_nodes_per_graph_eval,
+                primary_idx=primary_idx,
+                seed=args.seed + epoch * 11 + 5,
+            )
+            last_val_metrics = val_metrics
+            last_test_metrics = test_metrics
 
-        row = {
-            "epoch": epoch,
-            "train_loss": train_loss,
-            "train_norm_mse": train_metrics["norm_mse"],
-            "train_rmse_ps": train_metrics["rmse_ps"],
-            "val_norm_mse": val_metrics["norm_mse"],
-            "val_rmse_ps": val_metrics["rmse_ps"],
-            "test_norm_mse": test_metrics["norm_mse"],
-            "test_rmse_ps": test_metrics["rmse_ps"],
-            "val_wns_mae_ps": val_metrics["wns_mae_ps"],
-            "test_wns_mae_ps": test_metrics["wns_mae_ps"],
-        }
+            row = {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train_norm_mse": train_metrics["norm_mse"],
+                "train_rmse_ps": train_metrics["rmse_ps"],
+                "val_norm_mse": val_metrics["norm_mse"],
+                "val_rmse_ps": val_metrics["rmse_ps"],
+                "test_norm_mse": test_metrics["norm_mse"],
+                "test_rmse_ps": test_metrics["rmse_ps"],
+                "val_wns_mae_ps": val_metrics["wns_mae_ps"],
+                "test_wns_mae_ps": test_metrics["wns_mae_ps"],
+            }
+            print(
+                f"epoch={epoch:03d} "
+                f"train_loss={train_loss:.6e} "
+                f"val_norm_mse={val_metrics['norm_mse']:.6e} "
+                f"val_rmse_ps={val_metrics['rmse_ps']:.3f} "
+                f"test_rmse_ps={test_metrics['rmse_ps']:.3f}"
+            )
+        else:
+            row = {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train_norm_mse": "",
+                "train_rmse_ps": "",
+                "val_norm_mse": "",
+                "val_rmse_ps": "",
+                "test_norm_mse": "",
+                "test_rmse_ps": "",
+                "val_wns_mae_ps": "",
+                "test_wns_mae_ps": "",
+            }
+            print(f"epoch={epoch:03d} train_loss={train_loss:.6e} eval=skipped")
         epoch_rows.append(row)
-
-        print(
-            f"epoch={epoch:03d} "
-            f"train_loss={train_loss:.6e} "
-            f"val_norm_mse={val_metrics['norm_mse']:.6e} "
-            f"val_rmse_ps={val_metrics['rmse_ps']:.3f} "
-            f"test_rmse_ps={test_metrics['rmse_ps']:.3f}"
-        )
 
         ckpt_payload = {
             "epoch": epoch,
@@ -431,23 +479,25 @@ def main() -> None:
             "train_ids": config_payload["train_ids"],
             "val_ids": config_payload["val_ids"],
             "test_ids": config_payload["test_ids"],
-            "val_metrics": val_metrics,
-            "test_metrics": test_metrics,
+            "val_metrics": (val_metrics if do_eval else last_val_metrics),
+            "test_metrics": (test_metrics if do_eval else last_test_metrics),
+            "eval_epoch": do_eval,
         }
         torch.save(ckpt_payload, run_dir / "last.pt")
 
-        cur_val = float(val_metrics["norm_mse"])
-        if cur_val < best_val:
-            best_val = cur_val
-            best_epoch = epoch
-            bad_epochs = 0
-            torch.save(ckpt_payload, run_dir / "best.pt")
-        else:
-            bad_epochs += 1
+        if do_eval:
+            cur_val = float(val_metrics["norm_mse"])
+            if cur_val < best_val:
+                best_val = cur_val
+                best_epoch = epoch
+                bad_epochs = 0
+                torch.save(ckpt_payload, run_dir / "best.pt")
+            else:
+                bad_epochs += 1
 
-        if bad_epochs >= args.early_stop_patience:
-            print(f"early_stop epoch={epoch} patience={args.early_stop_patience}")
-            break
+            if bad_epochs >= args.early_stop_patience:
+                print(f"early_stop epoch={epoch} patience={args.early_stop_patience}")
+                break
 
     _write_epoch_csv(run_dir / "epoch_metrics.csv", epoch_rows)
 

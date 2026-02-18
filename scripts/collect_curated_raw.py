@@ -37,6 +37,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Collect curated raw artifacts for one run")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--design", required=True)
+    parser.add_argument("--flow-design", default="")
     parser.add_argument("--platform", default="nangate45")
     parser.add_argument("--variant", required=True)
     parser.add_argument("--clock-scale", type=float, required=True)
@@ -44,6 +45,16 @@ def main() -> None:
     parser.add_argument("--abc-area", type=int, required=True)
     parser.add_argument("--place-density", type=float, required=True)
     parser.add_argument("--routing-layer-adjustment", type=float, default=None)
+    parser.add_argument("--scenario-id", default="base")
+    parser.add_argument("--scenario-mode", default="func")
+    parser.add_argument("--scenario-pvt", default="typical")
+    parser.add_argument("--scenario-rc", default="typ")
+    parser.add_argument("--clock-uncertainty-ns", type=float, default=None)
+    parser.add_argument("--timing-derate-late", type=float, default=None)
+    parser.add_argument("--timing-derate-early", type=float, default=None)
+    parser.add_argument("--input-delay-scale", type=float, default=None)
+    parser.add_argument("--output-delay-scale", type=float, default=None)
+    parser.add_argument("--source-run-id", default="")
     parser.add_argument("--status", default="success")
     parser.add_argument("--orfs-flow-dir", default="OpenROAD-flow-scripts/flow")
     parser.add_argument("--out-root", default="data/raw_curated")
@@ -54,7 +65,8 @@ def main() -> None:
     out_dir = out_root / args.run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    paths = run_paths(args.platform, args.design, args.variant, root)
+    flow_design = args.flow_design.strip() or args.design
+    paths = run_paths(args.platform, flow_design, args.variant, root)
     results_dir = paths["results_dir"]
     reports_dir = paths["reports_dir"]
 
@@ -64,6 +76,7 @@ def main() -> None:
     run_meta = {
         "run_id": args.run_id,
         "design": args.design,
+        "flow_design": flow_design,
         "platform": args.platform,
         "variant": args.variant,
         "clock_scale": args.clock_scale,
@@ -71,6 +84,16 @@ def main() -> None:
         "abc_area": args.abc_area,
         "place_density": args.place_density,
         "routing_layer_adjustment": args.routing_layer_adjustment,
+        "scenario_id": args.scenario_id,
+        "scenario_mode": args.scenario_mode,
+        "scenario_pvt": args.scenario_pvt,
+        "scenario_rc": args.scenario_rc,
+        "clock_uncertainty_ns": args.clock_uncertainty_ns,
+        "timing_derate_late": args.timing_derate_late,
+        "timing_derate_early": args.timing_derate_early,
+        "input_delay_scale": args.input_delay_scale,
+        "output_delay_scale": args.output_delay_scale,
+        "source_run_id": args.source_run_id or args.run_id,
         "status": args.status,
         "collected_utc": utc_now_iso(),
         "source_paths": {
