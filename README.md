@@ -110,6 +110,41 @@ python3 scripts/run_scenario_ranker_battery.py \
   --epochs 40
 ```
 
+## Current Scenario/Corner Predictor Results (2026-02-17)
+### Data regime used for results
+- Replay dataset: `data/manifests/scenario_dominance_replay.csv` (`1600` scenario rows from `320` base implementations x `5` scenarios each).
+- Hold-replay dataset: `data/manifests/scenario_dominance_replay_hold.csv` (same grouping, hold-focused metric).
+- Holdout designs: `aes`, `dynamic_node`, `gcd`, `ibex`.
+
+### Important label quality note
+- Setup replay labels are currently degenerate: dominant scenario is always `setup_stress` (`320/320` groups), from `data/manifests/scenario_dominance_replay_setup_summary.json`.
+- Because of that, setup-only `Top-1=1.0` is expected and is not a strong stress test.
+- Hold replay labels are non-degenerate (`hold_stress` dominates `240` groups, `rcmax_guardband` dominates `80` groups), from `data/manifests/scenario_dominance_replay_hold_summary.json`.
+
+### Measured predictor quality
+- Setup replay battery (`results/scenario_ranker_runs/verification_battery_setup_scenario_only.json`):
+  `avg_test_top1=1.00`, `avg_test_topk=1.00`, `missed_violation_rate=0.00`.
+- Combined replay battery (`results/scenario_ranker_runs/verification_battery_combined_scenario_only.json`):
+  `avg_test_top1=1.00`, `avg_test_topk=1.00`, `missed_violation_rate=0.00`.
+- Hold replay battery (non-degenerate, most informative):
+  `results/scenario_ranker_runs/verification_battery_hold_scenario_only_latest.json`
+  - `avg_test_top1=0.75`
+  - `avg_test_topk=1.00` (`top_k=2`)
+  - `avg_test_mrr=0.8333`
+  - `avg_test_missed_violation_rate=0.00`
+  - `avg_test_worst_regret_ps_p95=2.01`
+  - `max_test_worst_regret_ps_max=8.04`
+
+### Design-level hold replay notes
+- `aes`: `test_top1=1.0`
+- `dynamic_node`: `test_top1=0.0`, `test_topk=1.0`, `worst_regret_ps_max=8.04`
+- `gcd`: `test_top1=1.0`
+- `ibex`: `test_top1=1.0`
+
+Interpretation:
+- As a scenario-reduction tool, `top_k=2` currently covered the true dominant hold scenario in all tested groups (`missed_violation_rate=0`).
+- Single-scenario pick (`top1`) is not yet robust enough on all designs.
+
 ## Timing Regression Models (Supporting)
 ### Multitask GNN
 ```bash
