@@ -7,6 +7,10 @@ __pycache__/
 *.pyc
 .venv/
 .venv*/
+**/.venv/
+**/.venv*/
+venv/
+env/
 
 # Local logs and temporary files
 logs/
@@ -21,3 +25,8 @@ configs/sdc_generated/
 # Generated dataset artifacts
 data/raw_curated/
 data/processed/
+
+# Generated scenario manifests (keep core split/index manifests tracked)
+data/manifests/scenario_*.csv
+data/manifests/scenario_*.json
+data/manifests/splits_mixed_*.json
