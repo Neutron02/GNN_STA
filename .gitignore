@@ -6,11 +6,18 @@ OpenROAD-flow-scripts/tools/OpenROAD/
 __pycache__/
 *.pyc
 .venv/
+.venv*/
 
 # Local logs and temporary files
-logs/pipeline/*.log
+logs/
 *.tmp
 
 # ML training artifacts
-results/train_runs/
-results/sweeps/
+results/
+
+# Generated flow constraints
+configs/sdc_generated/
+
+# Generated dataset artifacts
+data/raw_curated/
+data/processed/
