@@ -30,3 +30,4 @@ data/processed/
 data/manifests/scenario_*.csv
 data/manifests/scenario_*.json
 data/manifests/splits_mixed_*.json
+data/manifests/archive/

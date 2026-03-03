@@ -67,6 +67,11 @@ def main() -> None:
     parser.add_argument("--raw-root", default="data/raw_curated")
     parser.add_argument("--processed-root", default="data/processed")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--skip-row-counts",
+        action="store_true",
+        help="Skip expensive CSV row counting for num_* fields (faster on large datasets).",
+    )
     args = parser.parse_args()
 
     manifests_dir = Path(args.manifests_dir).resolve()
@@ -104,6 +109,17 @@ def main() -> None:
             except Exception:
                 validation_passed = ""
 
+        if args.skip_row_counts:
+            num_nodes = ""
+            num_edges = ""
+            num_labels = ""
+            num_paths = ""
+        else:
+            num_nodes = count_rows(nodes_csv)
+            num_edges = count_rows(edges_csv)
+            num_labels = count_rows(labels_csv)
+            num_paths = count_rows(paths_csv)
+
         index_rows.append(
             {
                 "run_id": run_id,
@@ -133,10 +149,10 @@ def main() -> None:
                 "global_json": str(global_json),
                 "validation_json": str(validation_json),
                 "validation_passed": validation_passed,
-                "num_nodes": count_rows(nodes_csv),
-                "num_edges": count_rows(edges_csv),
-                "num_labels": count_rows(labels_csv),
-                "num_paths": count_rows(paths_csv),
+                "num_nodes": num_nodes,
+                "num_edges": num_edges,
+                "num_labels": num_labels,
+                "num_paths": num_paths,
             }
         )
 

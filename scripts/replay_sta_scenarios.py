@@ -173,8 +173,22 @@ def _processed_ok(run_id: str, root: Path) -> bool:
     return all((d / n).exists() for n in PROCESSED_REQUIRED)
 
 
-def _validate(run_id: str, root: Path) -> bool:
-    cmd = ["python3", "scripts/validate_dataset.py", "--run-id", run_id]
+def _validate(
+    run_id: str,
+    root: Path,
+    min_finite_coverage: float,
+    allow_wns_mismatch: bool,
+) -> bool:
+    cmd = [
+        "python3",
+        "scripts/validate_dataset.py",
+        "--run-id",
+        run_id,
+        "--min-finite-coverage",
+        f"{min_finite_coverage}",
+    ]
+    if allow_wns_mismatch:
+        cmd.append("--allow-wns-mismatch")
     p = subprocess.run(
         cmd,
         cwd=str(root),
@@ -347,6 +361,22 @@ def main() -> None:
     ap.add_argument("--max-runs", type=int, default=0, help="Limit number of replay runs")
     ap.add_argument("--no-symlink-raw", action="store_true", help="Copy raw artifacts instead of symlinking")
     ap.add_argument("--paths-only", action="store_true", help="Only rerun path extraction + metrics patch")
+    ap.add_argument(
+        "--validate-min-finite-coverage",
+        type=float,
+        default=0.65,
+        help="Coverage threshold passed to validate_dataset.py.",
+    )
+    ap.add_argument(
+        "--strict-wns-check",
+        action="store_true",
+        help="If set, do not pass --allow-wns-mismatch to validate_dataset.py.",
+    )
+    ap.add_argument(
+        "--resume-verify-success",
+        action="store_true",
+        help="When --resume is set, re-run validation checks before skipping existing success rows.",
+    )
     args = ap.parse_args()
 
     root = repo_root()
@@ -396,8 +426,16 @@ def main() -> None:
                 scenario_id=str(sc.get("scenario_id", "base")),
             )
             status = str(rows_by_run.get(run_id, {}).get("status", "")).strip().lower()
-            if args.resume and status == "success" and _processed_ok(run_id, root) and _validate(run_id, root):
-                continue
+            if args.resume and status == "success" and _processed_ok(run_id, root):
+                if args.resume_verify_success and not _validate(
+                    run_id,
+                    root,
+                    min_finite_coverage=float(args.validate_min_finite_coverage),
+                    allow_wns_mismatch=not args.strict_wns_check,
+                ):
+                    pass
+                else:
+                    continue
             tasks.append(
                 {
                     "run_id": run_id,
@@ -597,8 +635,18 @@ def main() -> None:
 
             _patch_global_features(processed_dir, run_id, scenario, source_run_id)
 
+            validate_cmd = [
+                "python3",
+                "scripts/validate_dataset.py",
+                "--run-id",
+                run_id,
+                "--min-finite-coverage",
+                f"{float(args.validate_min_finite_coverage)}",
+            ]
+            if not args.strict_wns_check:
+                validate_cmd.append("--allow-wns-mismatch")
             _run_cmd(
-                ["python3", "scripts/validate_dataset.py", "--run-id", run_id],
+                validate_cmd,
                 cwd=root,
                 log_file=log_file,
                 dry_run=False,

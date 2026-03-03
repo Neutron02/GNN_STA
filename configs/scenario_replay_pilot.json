@@ -1,52 +1,53 @@
 {
+  "profile": "nangate45_core7_replay_v2",
   "scenarios": [
     {
       "scenario_id": "setup_stress",
       "scenario_mode": "func",
       "scenario_pvt": "ss",
       "scenario_rc": "max",
-      "clock_uncertainty_setup_ns": 0.08,
-      "clock_uncertainty_hold_ns": 0.01,
-      "timing_derate_early": 0.94,
-      "timing_derate_late": 1.12,
-      "input_delay_scale": 1.1,
-      "output_delay_scale": 1.1
+      "clock_uncertainty_setup_ns": 0.07,
+      "clock_uncertainty_hold_ns": 0.02,
+      "timing_derate_early": 0.96,
+      "timing_derate_late": 1.09,
+      "input_delay_scale": 1.02,
+      "output_delay_scale": 1.02
     },
     {
       "scenario_id": "hold_stress",
       "scenario_mode": "func",
       "scenario_pvt": "ff",
       "scenario_rc": "min",
-      "clock_uncertainty_setup_ns": 0.01,
-      "clock_uncertainty_hold_ns": 0.08,
-      "timing_derate_early": 1.08,
+      "clock_uncertainty_setup_ns": 0.02,
+      "clock_uncertainty_hold_ns": 0.07,
+      "timing_derate_early": 1.07,
       "timing_derate_late": 0.97,
-      "input_delay_scale": 0.9,
-      "output_delay_scale": 0.9
+      "input_delay_scale": 0.98,
+      "output_delay_scale": 0.98
     },
     {
       "scenario_id": "rcmax_guardband",
       "scenario_mode": "func",
       "scenario_pvt": "tt",
       "scenario_rc": "max",
-      "clock_uncertainty_setup_ns": 0.05,
+      "clock_uncertainty_setup_ns": 0.04,
       "clock_uncertainty_hold_ns": 0.03,
-      "timing_derate_early": 0.98,
+      "timing_derate_early": 0.99,
       "timing_derate_late": 1.06,
-      "input_delay_scale": 1.03,
-      "output_delay_scale": 1.03
+      "input_delay_scale": 1.05,
+      "output_delay_scale": 1.05
     },
     {
       "scenario_id": "rcmin_aggressive",
       "scenario_mode": "func",
       "scenario_pvt": "tt",
       "scenario_rc": "min",
-      "clock_uncertainty_setup_ns": 0.02,
+      "clock_uncertainty_setup_ns": 0.03,
       "clock_uncertainty_hold_ns": 0.05,
       "timing_derate_early": 1.03,
       "timing_derate_late": 0.98,
-      "input_delay_scale": 0.97,
-      "output_delay_scale": 0.97
+      "input_delay_scale": 0.95,
+      "output_delay_scale": 0.95
     }
   ]
 }

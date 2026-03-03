@@ -11,6 +11,23 @@ from pathlib import Path
 from openroad import Design, Tech
 
 
+def _load_report_json(path: Path) -> dict:
+    """Load report_checks JSON even when OpenROAD prepends warning lines."""
+    if not path.exists():
+        return {"checks": []}
+    text = path.read_text(encoding="utf-8")
+    if not text.strip():
+        return {"checks": []}
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end < start:
+            raise
+        return json.loads(text[start : end + 1])
+
+
 def _run_report(
     design: Design,
     out_json: Path,
@@ -105,10 +122,7 @@ def main() -> None:
             group_path_count=args.group_path_count,
             endpoint_path_count=args.endpoint_path_count,
         )
-        max_data = {"checks": []}
-        if max_json.exists():
-            with max_json.open("r", encoding="utf-8") as f:
-                max_data = json.load(f)
+        max_data = _load_report_json(max_json)
         max_checks = list(max_data.get("checks", []))
         max_checks.sort(key=lambda c: float(c.get("slack", 1e99)))
         # Legacy setup-max summary path kept for compatibility with existing pipeline.
@@ -126,10 +140,7 @@ def main() -> None:
             group_path_count=args.group_path_count,
             endpoint_path_count=args.endpoint_path_count,
         )
-        min_data = {"checks": []}
-        if min_json.exists():
-            with min_json.open("r", encoding="utf-8") as f:
-                min_data = json.load(f)
+        min_data = _load_report_json(min_json)
         min_checks = list(min_data.get("checks", []))
         min_checks.sort(key=lambda c: float(c.get("slack", 1e99)))
         min_csv = out_dir / "paths_hold_summary.csv"
