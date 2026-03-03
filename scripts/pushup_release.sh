@@ -14,6 +14,9 @@ set -euo pipefail
 #   output_dir = /opt/tmp_share/scottsa/GNN
 #   chunk_size = 1900m
 #   repo_slug  = derived from origin remote (owner/repo)
+#
+# Env:
+#   SKIP_PACKAGE=1  reuse existing archive parts/checksum in output_dir
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
@@ -45,8 +48,12 @@ ARCHIVE="${OUT_DIR}/${BASE}.tar.gz"
 SHA_FILE="${OUT_DIR}/${BASE}.sha256"
 
 echo "[pushup] repo=${REPO_SLUG} tag=${TAG}"
-echo "[pushup] packaging dataset into ${OUT_DIR}"
-scripts/package_dataset_release.sh "$OUT_DIR" "$TAG" "$CHUNK_SIZE"
+if [[ "${SKIP_PACKAGE:-0}" == "1" ]]; then
+  echo "[pushup] SKIP_PACKAGE=1 -> reusing existing package assets in ${OUT_DIR}"
+else
+  echo "[pushup] packaging dataset into ${OUT_DIR}"
+  scripts/package_dataset_release.sh "$OUT_DIR" "$TAG" "$CHUNK_SIZE"
+fi
 
 if [[ ! -f "$SHA_FILE" ]]; then
   echo "[pushup] missing checksum file: $SHA_FILE" >&2
@@ -182,9 +189,11 @@ upload_asset() {
   encoded_name="$(urlencode "$asset_name")"
   delete_asset_if_exists "$asset_name"
   echo "[pushup] uploading ${asset_name}"
+  # Use -T (streaming upload) to avoid large-memory spikes on big artifacts.
   curl -sS -u "$AUTH" \
     -H "Content-Type: application/octet-stream" \
-    --data-binary @"$asset_path" \
+    -X POST \
+    -T "$asset_path" \
     "${UPLOAD_URL}?name=${encoded_name}" > /dev/null
 }
 
