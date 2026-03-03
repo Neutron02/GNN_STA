@@ -183,7 +183,7 @@ def check_processed_artifacts(run_id: str, root: Path) -> bool:
     return all(p.exists() for p in needed)
 
 
-def validate_existing_dataset(run_id: str, root: Path) -> bool:
+def validate_existing_dataset(run_id: str, root: Path, min_finite_coverage: float | None = None) -> bool:
     if not check_processed_artifacts(run_id, root):
         return False
     cmd = [
@@ -193,6 +193,8 @@ def validate_existing_dataset(run_id: str, root: Path) -> bool:
         run_id,
         "--allow-wns-mismatch",
     ]
+    if min_finite_coverage is not None:
+        cmd.extend(["--min-finite-coverage", str(float(min_finite_coverage))])
     result = subprocess.run(
         cmd,
         cwd=str(root),
@@ -208,6 +210,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run phase-1 ORFS sweep + dataset extraction")
     parser.add_argument("--config", default="configs/sweep_phase1.json")
     parser.add_argument("--jobs", type=int, default=2)
+    parser.add_argument(
+        "--num-cores",
+        type=int,
+        default=0,
+        help="Override per-run ORFS/OpenROAD threads (NUM_CORES). 0 uses config default_num_cores.",
+    )
+    parser.add_argument(
+        "--validate-min-finite-coverage",
+        type=float,
+        default=None,
+        help="Override validate_dataset --min-finite-coverage (default validator value if omitted).",
+    )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--run-id", action="append", default=[], help="Only execute selected run_id (repeatable)")
@@ -270,7 +284,9 @@ def main() -> None:
                 row["last_error"] = "success artifacts missing; scheduled again"
         elif args.resume and row["status"] in {"failed", "running"}:
             # Fast reconcile: if prior run already produced a valid dataset, mark success.
-            if check_success_artifacts(config, run, root) and validate_existing_dataset(run["run_id"], root):
+            if check_success_artifacts(config, run, root) and validate_existing_dataset(
+                run["run_id"], root, min_finite_coverage=args.validate_min_finite_coverage
+            ):
                 row["status"] = "success"
                 row["last_error"] = ""
                 row["last_update_utc"] = utc_now_iso()
@@ -339,7 +355,7 @@ def main() -> None:
         update_status(run_id, "running")
 
         try:
-            num_cores = int(config.get("default_num_cores", 4))
+            num_cores = int(args.num_cores) if int(args.num_cores) > 0 else int(config.get("default_num_cores", 4))
             reuse_flow = check_success_artifacts(config, run, root)
 
             if reuse_flow:
@@ -458,6 +474,8 @@ def main() -> None:
                 run_id,
                 "--allow-wns-mismatch",
             ]
+            if args.validate_min_finite_coverage is not None:
+                validate_cmd.extend(["--min-finite-coverage", str(float(args.validate_min_finite_coverage))])
             run_cmd(validate_cmd, log_file, root, args.dry_run)
 
             update_status(run_id, "success")
@@ -470,7 +488,8 @@ def main() -> None:
             update_status(run_id, "failed", str(exc))
             return {"run_id": run_id, "status": "failed", "error": str(exc)}
 
-    print(f"Selected runs: {len(work_items)}")
+    effective_num_cores = int(args.num_cores) if int(args.num_cores) > 0 else int(config.get("default_num_cores", 4))
+    print(f"Selected runs: {len(work_items)} | jobs={max(1, args.jobs)} | num_cores={effective_num_cores}")
     if args.dry_run:
         for run in work_items:
             print(

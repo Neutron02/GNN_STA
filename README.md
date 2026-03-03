@@ -170,7 +170,7 @@ python3 scripts/train_tripath_dualpass.py \
   --loss-nodes-per-graph-train 512 \
   --loss-nodes-per-graph-eval 512 \
   --device cuda
-```
+``` 
 
 Evaluate checkpoint:
 ```bash

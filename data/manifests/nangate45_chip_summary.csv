@@ -1,0 +1,17 @@
+design,flow_design,run_id,status,purpose,nominal_clock_ns_sdc,run_clock_ns,period_min_ns_report,recommended_clock_ns,path_min_slack_ns,wns_ns,cell_count_est,cell_area_est,num_nodes,num_edges,sim_time_est_sec,peak_mem_est_kb,data_size_est_mb
+aes,aes,aes__clk820ps__abc0__pd500__rlabase,success,AES crypto accelerator block,0.82,0.82,0.82,0.861,-0.002896,-0.0028956836928273333,13104,17200.0,57566,80773,982.04,1373596,91.43400001525879
+ariane133,ariane133,ariane133__clk3000ps__abc0__pd500__rlabase,success,Ariane (CVA6) RISC-V core variant,3.0,3.0,3.33,3.497,-0.326,-0.5999999941330714,163544,719000.0,636250,820498,8093.05,9420988,1162.2309579849243
+ariane136,ariane136,ariane136__clk6000ps__abc0__pd350__rlabase,success,Ariane (CVA6) RISC-V core variant,6.0,6.0,5.45,5.723,0.5521,0.0,167365,736000.0,652973,843731,50.62,3192780,1216.3329591751099
+black_parrot,bp,black_parrot__clk6000ps__abc1__pd500__rlabase,success,BlackParrot top-level SoC-style integration,6.0,6.0,8.6,9.03,-2.598,-2.597627002387526,239098,676000.0,810499,989125,63.8,3534180,1505.6787614822388
+bp_be_top,bp_be,bp_be_top__clk2600ps__abc0__pd500__rlabase,success,BlackParrot backend pipeline subsystem,2.6,2.6,2.87,3.014,-0.2717,-0.5999999941330714,50007,237000.0,195773,243665,20.46,1099804,356.35465145111084
+bp_fe_top,bp_fe,bp_fe_top__clk1800ps__abc0__pd500__rlabase,success,BlackParrot frontend pipeline subsystem,1.8,1.8,1.87,1.964,-0.055940000000000004,-0.36000000203095794,30413,211000.0,123738,153823,11.32,809140,220.36450481414795
+bp_multi_top,bp_multi,bp_multi_top__clk4800ps__abc1__pd500__rlabase,success,BlackParrot multi-tile/top integration,4.8,4.8,2.99,3.14,1.806,1.8063639473098192,80965,496000.0,332603,407020,22.98,1550516,605.9410715103149
+bp_quad,bp_quad,bp_quad__clk3000ps__abc0__pd500__rlabase,planned,BlackParrot quad-core style integration,3.0,3.0,,3.0,,,1178456,4890000.0,4597735,,1423.61,4808048,8369.0
+dynamic_node,dynamic_node,dynamic_node__clk6000ps__abc0__pd500__rlabase,success,Synthetic control/datapath benchmark,6.0,6.0,6.11,6.416,-0.1149,-0.11485185025250644,9132,20800.0,40001,48431,604.94,1250428,62.69984722137451
+gcd,gcd,gcd__clk460ps__abc1__pd500__rlabase,success,Tiny arithmetic/control sanity benchmark,0.46,0.46,0.51,0.536,-0.05158,-0.05158090621293354,501,639.198,1826,2207,51.13,860416,3.69612979888916
+ibex,ibex,ibex__clk2200ps__abc0__pd500__rlabase,success,Small RISC-V core,2.2,2.2,2.2,2.31,-0.0027589999999999997,-0.439999980894612,16070,28700.0,60984,79904,1031.58,1444388,100.83368492126465
+jpeg,jpeg,jpeg__clk1000ps__abc1__pd500__rlabase,success,JPEG codec datapath block,1.0,1.0,1.12,1.176,-0.12249999999999998,-0.12254880443762772,60459,89100.0,203162,265206,2202.19,2268512,283.54791164398193
+mempool_group,mempool_group,mempool_group__clk3000ps__abc0__pd500__rlabase,success,Manycore/cluster integration block,3.0,3.0,3.77,3.959,-2.16,-2.1600001787192014,132760,240000.0,526403,687857,44.58,2392532,1116.5733222961426
+swerv,swerv,swerv__clk2000ps__abc0__pd500__rlabase,success,Western Digital SweRV RISC-V core,2.0,2.0,2.15,2.257,-0.1473,-0.39999997758499717,89055,157000.0,344970,451595,3744.37,4124944,564.6069469451904
+swerv_wrapper,swerv_wrapper,swerv_wrapper__clk2000ps__abc0__pd500__rlabase,planned,SweRV wrapper/integration top,2.0,2.0,,2.0,,,77286,619000.0,301531,,750.48,1437864,548.9
+tinyRocket,tinyRocket,tinyRocket__clk1200ps__abc0__pd750__rlabase,planned,Rocket-chip tinyRocket core/tile,1.2,1.2,1.3,1.365,,,37237,54700.0,145280,,1741.755,1864470,264.4

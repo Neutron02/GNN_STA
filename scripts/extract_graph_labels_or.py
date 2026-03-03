@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import math
+import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
@@ -123,6 +124,91 @@ def load_run_meta(raw_dir: Path) -> Dict:
         return json.load(f)
 
 
+def parse_liberty_pin_caps(path: Path) -> Dict[Tuple[str, str], Tuple[float, float]]:
+    """Parse per-pin capacitance from a liberty file.
+
+    Returns mapping:
+      (cell_name, pin_name) -> (cap_max_f, cap_min_f)
+    """
+
+    def norm_name(s: str) -> str:
+        return s.strip().strip('"').strip()
+
+    def parse_num(line: str, key: str):
+        m = re.search(rf"\b{key}\s*:\s*([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*;", line)
+        if not m:
+            return None
+        try:
+            return float(m.group(1))
+        except Exception:
+            return None
+
+    caps: Dict[Tuple[str, str], Tuple[float, float]] = {}
+    cell_name = None
+    cell_depth = 0
+    pin_name = None
+    pin_depth = 0
+    cap = None
+    rise_cap = None
+    fall_cap = None
+
+    with path.open("r", encoding="utf-8", errors="ignore") as f:
+        for raw in f:
+            line = raw.split("//", 1)[0]
+            stripped = line.strip()
+
+            if cell_name is None:
+                m_cell = re.match(r"^\s*cell\s*\(\s*([^)]+)\s*\)\s*\{", stripped)
+                if m_cell:
+                    cell_name = norm_name(m_cell.group(1))
+                    cell_depth = stripped.count("{") - stripped.count("}")
+                continue
+
+            if pin_name is None:
+                m_pin = re.match(r"^\s*pin\s*\(\s*([^)]+)\s*\)\s*\{", stripped)
+                if m_pin:
+                    pin_name = norm_name(m_pin.group(1))
+                    pin_depth = stripped.count("{") - stripped.count("}")
+                    cap = None
+                    rise_cap = None
+                    fall_cap = None
+
+                cell_depth += stripped.count("{") - stripped.count("}")
+                if cell_depth <= 0:
+                    cell_name = None
+                    cell_depth = 0
+                continue
+
+            v_cap = parse_num(stripped, "capacitance")
+            if v_cap is not None:
+                cap = v_cap
+            v_rise = parse_num(stripped, "rise_capacitance")
+            if v_rise is not None:
+                rise_cap = v_rise
+            v_fall = parse_num(stripped, "fall_capacitance")
+            if v_fall is not None:
+                fall_cap = v_fall
+
+            delta = stripped.count("{") - stripped.count("}")
+            pin_depth += delta
+            cell_depth += delta
+
+            if pin_depth <= 0:
+                vals = [v for v in (cap, rise_cap, fall_cap) if isinstance(v, float) and math.isfinite(v)]
+                if vals and cell_name and pin_name:
+                    caps[(cell_name, pin_name)] = (max(vals), min(vals))
+                pin_name = None
+                pin_depth = 0
+                cap = None
+                rise_cap = None
+                fall_cap = None
+
+            if cell_depth <= 0:
+                cell_name = None
+                cell_depth = 0
+    return caps
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract graph + setup labels from finalized design artifacts")
     parser.add_argument("--odb", required=True)
@@ -132,6 +218,18 @@ def main() -> None:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--raw-dir", required=True)
     parser.add_argument("--out-dir", required=True)
+    parser.add_argument(
+        "--port-cap-mode",
+        choices=["liberty", "sta", "none"],
+        default="liberty",
+        help=(
+            "Port-cap extraction mode: "
+            "'liberty' parses pin cap from .lib (stable), "
+            "'sta' queries timing.getPortCap() (can segfault on some large designs), "
+            "'none' writes NaN."
+        ),
+    )
+    parser.add_argument("--enable-port-cap", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     odb_path = Path(args.odb).resolve()
@@ -158,10 +256,25 @@ def main() -> None:
 
     block = design.getBlock()
     rcx_map = parse_rcx_csv(raw_dir / "6_net_rc.csv")
+    cap_mode = "sta" if args.enable_port_cap else str(args.port_cap_mode)
+    liberty_pin_caps = parse_liberty_pin_caps(liberty_path) if cap_mode == "liberty" else {}
 
     nodes: List[Dict] = []
     node_name_to_id: Dict[str, int] = {}
     node_terms: Dict[int, Tuple[str, object]] = {}
+
+    def port_caps_for_iterm(iterm, master_name: str, pin_name: str) -> Tuple[float, float]:
+        if cap_mode == "none":
+            return float("nan"), float("nan")
+        if cap_mode == "sta":
+            return (
+                time_or_nan(lambda: timing.getPortCap(iterm, corner, Timing.Max), timing),
+                time_or_nan(lambda: timing.getPortCap(iterm, corner, Timing.Min), timing),
+            )
+        vals = liberty_pin_caps.get((master_name, pin_name))
+        if vals is None:
+            return float("nan"), float("nan")
+        return vals
 
     def add_iterm(iterm) -> int:
         node_name = design.getITermName(iterm)
@@ -185,6 +298,8 @@ def main() -> None:
         except Exception:
             pass
 
+        cap_max_f, cap_min_f = port_caps_for_iterm(iterm, master.getName(), mterm.getName())
+
         nodes.append(
             {
                 "node_id": node_id,
@@ -204,8 +319,8 @@ def main() -> None:
                 "inst_x_um": inst_x_um,
                 "inst_y_um": inst_y_um,
                 "cell_area_um2": area_um2,
-                "port_cap_max_f": time_or_nan(lambda: timing.getPortCap(iterm, corner, Timing.Max), timing),
-                "port_cap_min_f": time_or_nan(lambda: timing.getPortCap(iterm, corner, Timing.Min), timing),
+                "port_cap_max_f": cap_max_f,
+                "port_cap_min_f": cap_min_f,
             }
         )
         return node_id
@@ -227,6 +342,12 @@ def main() -> None:
         node_name_to_id[node_name] = node_id
         node_terms[node_id] = ("bterm", bterm)
 
+        bterm_cap_max = float("nan")
+        bterm_cap_min = float("nan")
+        if cap_mode == "sta":
+            bterm_cap_max = time_or_nan(lambda: timing.getPortCap(bterm, corner, Timing.Max), timing)
+            bterm_cap_min = time_or_nan(lambda: timing.getPortCap(bterm, corner, Timing.Min), timing)
+
         nodes.append(
             {
                 "node_id": node_id,
@@ -246,8 +367,8 @@ def main() -> None:
                 "inst_x_um": float("nan"),
                 "inst_y_um": float("nan"),
                 "cell_area_um2": float("nan"),
-                "port_cap_max_f": time_or_nan(lambda: timing.getPortCap(bterm, corner, Timing.Max), timing),
-                "port_cap_min_f": time_or_nan(lambda: timing.getPortCap(bterm, corner, Timing.Min), timing),
+                "port_cap_max_f": bterm_cap_max,
+                "port_cap_min_f": bterm_cap_min,
             }
         )
         return node_id
@@ -532,6 +653,7 @@ def main() -> None:
         "input_delay_scale": run_meta.get("input_delay_scale"),
         "output_delay_scale": run_meta.get("output_delay_scale"),
         "source_run_id": run_meta.get("source_run_id", args.run_id),
+        "port_cap_mode": cap_mode,
         "num_nodes": len(nodes),
         "num_edges": len(edges),
         "num_net_edges": sum(1 for e in edges if e["edge_type"] == "net"),
